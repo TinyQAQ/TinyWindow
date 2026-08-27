@@ -30,9 +30,24 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.center()
         }
         model?.refreshFromEnvironment()
+        Self.front(window)
+    }
+
+    /// Cooperative activation (macOS 14+) is routinely DENIED when invoked
+    /// from an accessory app's status-item menu — the window lands behind the
+    /// active app. Force it, and repeat once on the next runloop turn because
+    /// the activation-policy flip needs a beat to settle.
+    @MainActor
+    static func front(_ window: NSWindow?) {
+        guard let window else { return }
         NSApp.setActivationPolicy(.regular)
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
