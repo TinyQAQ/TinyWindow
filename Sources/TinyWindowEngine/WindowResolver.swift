@@ -32,9 +32,14 @@ final class WindowResolver: @unchecked Sendable {
         shared.resolverGeneration.load(ordering: .relaxed) == generation
     }
 
-    private func roughlyEqual(_ a: QRect, _ b: QRect) -> Bool {
-        abs(a.x - b.x) <= 5 && abs(a.y - b.y) <= 5 &&
-        abs(a.width - b.width) <= 5 && abs(a.height - b.height) <= 5
+    /// True when a frame covers (nearly) the union of all displays — the
+    /// signature of Finder's desktop window and similar overlays.
+    private func spansAllScreens(_ frame: QRect) -> Bool {
+        let screens = shared.screens.withLock { $0 }
+        guard let first = screens.first else { return false }
+        var union = first.frameQ.rawQuartz
+        for screen in screens.dropFirst() { union = union.union(screen.frameQ.rawQuartz) }
+        return frame.width >= union.width * 0.97 && frame.height >= union.height * 0.97
     }
 
     private func run(generation gen: UInt64, downPoint down: QPoint) {
@@ -95,16 +100,31 @@ final class WindowResolver: @unchecked Sendable {
 
         // Identity check: the AX hit-test can land on an app's full-desktop
         // window instead of the one being dragged (Finder's desktop spans all
-        // displays and contains every point). The CG bounds are ground truth —
-        // if the AX frame disagrees, find the app window that matches them.
-        if let axFrame = AX.frame(of: window), !roughlyEqual(axFrame, startBounds) {
+        // displays and contains every point). Match by WINDOW ID, never by
+        // frame — AX frames go stale right after our own writes (Electron
+        // keeps reporting the pre-apply frame for a while, which made a
+        // frame-equality check reject every follow-up drag).
+        if let axID = AX.windowID(of: window) {
+            if axID != windowID {
+                if let match = AX.windows(pid: hitPID).first(where: { AX.windowID(of: $0) == windowID }) {
+                    window = match
+                    EngineDiagnostics.log("resolve: hit-test hit window id=\(axID), dragged id=\(windowID) — re-matched by id")
+                } else {
+                    EngineDiagnostics.log("resolve: rejected (no AX window with id \(windowID))")
+                    return deliver(gen, .rejected)
+                }
+            }
+        } else if let axFrame = AX.frame(of: window), spansAllScreens(axFrame) {
+            // Bridge unavailable: only intercept the desktop-window signature
+            // (a frame covering the union of all displays); trust the
+            // hit-test result otherwise.
             if let match = AX.windows(pid: hitPID).first(where: { candidate in
-                AX.frame(of: candidate).map { roughlyEqual($0, startBounds) } ?? false
+                AX.frame(of: candidate).map { !spansAllScreens($0) } ?? false
             }) {
                 window = match
-                EngineDiagnostics.log("resolve: AX hit-test window mismatched CG bounds (\(Int(axFrame.width))×\(Int(axFrame.height))) — re-matched by frame")
+                EngineDiagnostics.log("resolve: hit-test hit a desktop-span window — using first normal window instead")
             } else {
-                EngineDiagnostics.log("resolve: rejected (no AX window matches CG bounds \(Int(startBounds.width))×\(Int(startBounds.height)))")
+                EngineDiagnostics.log("resolve: rejected (only desktop-span windows found)")
                 return deliver(gen, .rejected)
             }
         }

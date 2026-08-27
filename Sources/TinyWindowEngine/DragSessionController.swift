@@ -289,11 +289,13 @@ final class DragSessionController: @unchecked Sendable {
     private func dragMoved(_ session: Session, cursor: QPoint) {
         if session.earlyApplied {
             // Fingers came back during the three-finger-lift grace: the system
-            // drag resumes and pulls the window back on its own. Absorb until
-            // the real mouseUp.
-            earlyApplyToken &+= 1
-            state = .rejected
-            return
+            // resumes the drag. Treat it as a fresh live drag — clear the
+            // early-apply state so pads and drops work immediately instead of
+            // absorbing the whole gesture.
+            EngineDiagnostics.log("drag: resumed after early-apply — re-entering live drag")
+            session.earlyApplied = false
+            session.hoveredLayoutID = nil
+            session.recentHover = nil
         }
         // Escape-to-cancel without a keyboard listener: cheap WindowServer poll.
         if !session.cancelled, CGEventSource.keyState(.combinedSessionState, key: 53) {

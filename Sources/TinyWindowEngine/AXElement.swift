@@ -73,6 +73,22 @@ enum AX {
         AXElement(raw: AXUIElementCreateApplication(pid))
     }
 
+    /// Bridge from an AX window element to its CGWindowID. Private API
+    /// (`_AXUIElementGetWindow`) — stable for over a decade and used by every
+    /// major window manager; soft-resolved so its absence degrades gracefully.
+    private static let axGetWindow: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError)? = {
+        guard let handle = dlopen(nil, RTLD_NOW),
+              let symbol = dlsym(handle, "_AXUIElementGetWindow") else { return nil }
+        return unsafeBitCast(symbol, to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self)
+    }()
+
+    static func windowID(of element: AXElement) -> CGWindowID? {
+        guard let axGetWindow else { return nil }
+        var windowID: CGWindowID = 0
+        guard axGetWindow(element.raw, &windowID) == .success, windowID != 0 else { return nil }
+        return windowID
+    }
+
     /// All AX windows of an app.
     static func windows(pid: pid_t) -> [AXElement] {
         guard let ref = copyAttribute(appElement(pid: pid), kAXWindowsAttribute),
