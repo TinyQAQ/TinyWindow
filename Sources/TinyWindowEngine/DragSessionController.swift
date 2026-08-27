@@ -31,6 +31,11 @@ final class DragSessionController: @unchecked Sendable {
         var hoveredLayoutID: UUID?
         var padsVisible = false
         var cancelled = false
+        /// Any drag event carried the trackpad-touch subtype.
+        var isTouchDrag = false
+        /// The three-finger-lift grace already applied the layout; the real
+        /// (late) mouseUp must not apply again.
+        var earlyApplied = false
         /// Releasing the mouse often twitches the cursor a few px off a small
         /// region right before mouseUp — remember the last real hover briefly
         /// so the drop the user SAW highlighted still lands.
@@ -63,15 +68,19 @@ final class DragSessionController: @unchecked Sendable {
     private var watchdogIdleMisses = 0
     private var loggedFirstEvent = false
     private var pendingRelease: PendingRelease?
+    private var lastDragEventAt: TimeInterval = 0
+    private var earlyApplyToken: UInt64 = 0
 
     // Wired by TidyEngine after construction.
     var startIdentification: (@Sendable (_ generation: UInt64, _ downPoint: QPoint) -> Void)!
     var applyLayout: (@Sendable (_ layout: Layout, _ target: TargetWindow, _ screen: ScreenSnapshot) -> Void)!
     var overlayShow: (@Sendable (_ screenID: CGDirectDisplayID, _ token: UInt64) -> Void)!
-    var overlayHideAll: (@Sendable () -> Void)!
+    var overlayHideAll: (@Sendable (_ animated: Bool) -> Void)!
     var overlaySetHover: (@Sendable (_ layoutID: UUID?) -> Void)!
     var reenableTap: (@Sendable () -> Void)!
     var emitEvent: (@Sendable (EngineEvent) -> Void)!
+    /// Runs a block on the tap thread after a delay (early-apply deadline).
+    var scheduleOnTapThread: (@Sendable (_ delay: TimeInterval, _ block: @escaping @Sendable () -> Void) -> Void)!
 
     init(shared: EngineSharedState) {
         self.shared = shared
@@ -79,7 +88,7 @@ final class DragSessionController: @unchecked Sendable {
 
     // MARK: - Event entry points (tap thread)
 
-    func handleMouse(_ type: CGEventType, location: QPoint, optionDown flag: Bool) {
+    func handleMouse(_ type: CGEventType, location: QPoint, optionDown flag: Bool, isTouch: Bool) {
         if !loggedFirstEvent {
             loggedFirstEvent = true
             EngineDiagnostics.log("tap: events flowing (first mouse event)")
@@ -88,7 +97,10 @@ final class DragSessionController: @unchecked Sendable {
         optionDown = flag
         switch type {
         case .leftMouseDown: mouseDown(at: location)
-        case .leftMouseDragged: mouseDragged(to: location)
+        case .leftMouseDragged:
+            lastDragEventAt = ProcessInfo.processInfo.systemUptime
+            if isTouch, case .windowDrag(let session) = state { session.isTouchDrag = true }
+            mouseDragged(to: location)
         case .leftMouseUp: mouseUp()
         default: break
         }
@@ -214,16 +226,22 @@ final class DragSessionController: @unchecked Sendable {
         watchdogIdleMisses = 0
         switch state {
         case .windowDrag(let session):
+            earlyApplyToken &+= 1
             state = .idle
-            // Hide pads FIRST, in this same turn — a slow AX write must never
-            // pin overlay state.
-            overlayHideAll()
+            // Hide pads FIRST and instantly — a snappy release is the product.
+            overlayHideAll(false)
             defer { emitEvent(.dragEnded) }
+            let now = ProcessInfo.processInfo.systemUptime
+            let upGap = Int((now - lastDragEventAt) * 1000)
+            if session.earlyApplied {
+                // The three-finger-lift grace already applied this drop.
+                EngineDiagnostics.log("drop: skipped (early-applied) upGap=\(upGap)ms")
+                return
+            }
             // The RELEASE POINT is ground truth: hit-test the mouseUp location
             // directly (the async view highlight can lag either way). Fall back
             // to the tracked hover, then to a brief sticky window for the
             // release-twitch case, then to the ⌥-release grace.
-            let now = ProcessInfo.processInfo.systemUptime
             let cursor = shared.cursor.withLock { $0 }
             let snapshot = shared.padHits.withLock { $0 }
             var effectiveHover: UUID?
@@ -249,17 +267,9 @@ final class DragSessionController: @unchecked Sendable {
                 effectiveHover = grace
                 via = "optionGrace"
             }
-            EngineDiagnostics.log("drop: via=\(via) hovered=\(effectiveHover?.uuidString.prefix(8) ?? "nil") cursor=(\(Int(cursor.x)),\(Int(cursor.y))) cancelled=\(session.cancelled)")
+            EngineDiagnostics.log("drop: via=\(via) hovered=\(effectiveHover?.uuidString.prefix(8) ?? "nil") cursor=(\(Int(cursor.x)),\(Int(cursor.y))) upGap=\(upGap)ms cancelled=\(session.cancelled)")
             guard !session.cancelled, let layoutID = effectiveHover else { return }
-            let config = shared.configuration.withLock { $0 }
-            let screens = shared.screens.withLock { $0 }
-            guard let layout = config.layouts.first(where: { $0.id == layoutID }),
-                  let screen = screens.screen(withID: session.stripScreenID) else {
-                EngineDiagnostics.log("drop: layout or screen lookup FAILED")
-                return
-            }
-            EngineDiagnostics.log("drop: applying '\(layout.name)' on screen=\(screen.displayID)")
-            applyLayout(layout, session.target, screen)
+            applyDrop(session, layoutID: layoutID, via: via)
         case .identifying:
             // Fast flick: released before identification completed. Keep the
             // resolver alive (it finalizes on button-up) — a confirm within
@@ -277,11 +287,20 @@ final class DragSessionController: @unchecked Sendable {
     }
 
     private func dragMoved(_ session: Session, cursor: QPoint) {
+        if session.earlyApplied {
+            // Fingers came back during the three-finger-lift grace: the system
+            // drag resumes and pulls the window back on its own. Absorb until
+            // the real mouseUp.
+            earlyApplyToken &+= 1
+            state = .rejected
+            return
+        }
         // Escape-to-cancel without a keyboard listener: cheap WindowServer poll.
         if !session.cancelled, CGEventSource.keyState(.combinedSessionState, key: 53) {
             session.cancelled = true
             session.hoveredLayoutID = nil
-            overlayHideAll()
+            earlyApplyToken &+= 1
+            overlayHideAll(true)
             return
         }
         guard !session.cancelled else { return }
@@ -315,15 +334,63 @@ final class DragSessionController: @unchecked Sendable {
         let newHover = newHit?.layoutID
         if newHover != session.hoveredLayoutID {
             session.hoveredLayoutID = newHover
+            earlyApplyToken &+= 1
             if let newHover, let newHit {
                 session.graceHoverID = nil
                 session.recentHover = RecentHover(
                     id: newHover, rect: newHit.rectQ,
                     at: ProcessInfo.processInfo.systemUptime)
+                // Three-finger drags: the OS delays the synthetic mouseUp for
+                // hundreds of ms after the fingers lift. Fingers resting on
+                // the trackpad emit continuous micro-tremor events; true
+                // silence while hovering means the fingers are OFF — start
+                // the silence watch.
+                if session.isTouchDrag { armEarlyApply(earlyApplyToken) }
             }
             EngineDiagnostics.log("hover: \(newHover?.uuidString.prefix(8) ?? "nil") cursor=(\(Int(cursor.x)),\(Int(cursor.y))) snapToken=\(snapshot?.token ?? 0) stripToken=\(stripToken)")
             overlaySetHover(newHover)
         }
+    }
+
+    // MARK: - Three-finger-lift early apply
+
+    private func armEarlyApply(_ token: UInt64) {
+        scheduleOnTapThread(0.20) { [weak self] in
+            self?.earlyApplyCheck(token)
+        }
+    }
+
+    private func earlyApplyCheck(_ token: UInt64) {
+        guard token == earlyApplyToken,
+              case .windowDrag(let session) = state,
+              session.isTouchDrag, !session.cancelled, !session.earlyApplied,
+              session.padsVisible, let hover = session.hoveredLayoutID else { return }
+        let quiet = ProcessInfo.processInfo.systemUptime - lastDragEventAt
+        if quiet < 0.18 {
+            // Still trembling — fingers are on the pad; keep watching.
+            scheduleOnTapThread(Swift.max(0.05, 0.20 - quiet)) { [weak self] in
+                self?.earlyApplyCheck(token)
+            }
+            return
+        }
+        session.earlyApplied = true
+        overlayHideAll(false)
+        _ = applyDrop(session, layoutID: hover, via: "early(quiet=\(Int(quiet * 1000))ms)")
+        emitEvent(.dragEnded)
+    }
+
+    @discardableResult
+    private func applyDrop(_ session: Session, layoutID: UUID, via: String) -> Bool {
+        let config = shared.configuration.withLock { $0 }
+        let screens = shared.screens.withLock { $0 }
+        guard let layout = config.layouts.first(where: { $0.id == layoutID }),
+              let screen = screens.screen(withID: session.stripScreenID) else {
+            EngineDiagnostics.log("drop: layout or screen lookup FAILED")
+            return false
+        }
+        EngineDiagnostics.log("drop: via=\(via) applying '\(layout.name)' on screen=\(screen.displayID)")
+        applyLayout(layout, session.target, screen)
+        return true
     }
 
     private func updatePadVisibility(_ session: Session) {
@@ -351,7 +418,8 @@ final class DragSessionController: @unchecked Sendable {
             }
             EngineDiagnostics.log("pads: hide mode=\(mode.rawValue) grace=\(session.graceHoverID?.uuidString.prefix(8) ?? "nil")")
             session.hoveredLayoutID = nil
-            overlayHideAll()
+            earlyApplyToken &+= 1
+            overlayHideAll(true)
         }
     }
 
@@ -362,10 +430,11 @@ final class DragSessionController: @unchecked Sendable {
     private func forceCancel() {
         bumpGeneration()
         pendingRelease = nil
+        earlyApplyToken &+= 1
         watchdogIdleMisses = 0
         let buttonDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
         state = buttonDown ? .rejected : .idle
-        overlayHideAll()
+        overlayHideAll(false)
     }
 
     private func bumpGeneration() {

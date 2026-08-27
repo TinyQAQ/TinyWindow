@@ -85,8 +85,8 @@ final class OverlayCoordinator {
         preview.show(frameC: CoordinateSpace.cocoa(fromQuartz: rectQ, primaryHeight: primaryHeight))
     }
 
-    func hideAll() {
-        for panel in panels.values { panel.hide(animated: true) }
+    func hideAll(animated: Bool = true) {
+        for panel in panels.values { panel.hide(animated: animated) }
         preview.hide()
         currentScreenID = nil
         shared.padHits.withLock { $0 = nil }

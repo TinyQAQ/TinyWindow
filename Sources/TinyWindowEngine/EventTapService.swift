@@ -103,10 +103,13 @@ private func tinyWindowTapCallback(
         EngineDiagnostics.log("tap: DISABLED by \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
         controller.tapWasDisabled()
     case .leftMouseDown, .leftMouseDragged, .leftMouseUp:
+        // NX_SUBTYPE_MOUSE_TOUCH (3): pointer events synthesized from trackpad
+        // touches — distinguishes three-finger drags from physical-button drags.
         controller.handleMouse(
             type,
             location: QPoint(rawQuartz: event.location),
-            optionDown: event.flags.contains(.maskAlternate))
+            optionDown: event.flags.contains(.maskAlternate),
+            isTouch: event.getIntegerValueField(.mouseEventSubtype) == 3)
     default:
         break
     }

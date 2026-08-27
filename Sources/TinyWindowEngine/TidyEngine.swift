@@ -61,9 +61,14 @@ public final class TidyEngine {
                 }
             }
         }
-        controller.overlayHideAll = {
+        controller.overlayHideAll = { animated in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { overlay.hideAll() }
+                MainActor.assumeIsolated { overlay.hideAll(animated: animated) }
+            }
+        }
+        controller.scheduleOnTapThread = { delay, block in
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                eventTap.perform(block)
             }
         }
         controller.overlaySetHover = { layoutID in
