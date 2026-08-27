@@ -26,7 +26,7 @@ struct PadStripGeometry {
     let panelFrameC: CGRect
     let pads: [PadRender]
     let titleHeight: CGFloat
-    let hits: [PadHit]
+    let hitGroups: [PadHitGroup]
 
     static func compute(layouts: [Layout], settings: AppSettings,
                         screen: ScreenSnapshot, primaryHeight: CGFloat) -> PadStripGeometry? {
@@ -79,7 +79,7 @@ struct PadStripGeometry {
         let panelFrameC = CGRect(x: origin.x, y: origin.y, width: panelW, height: panelH)
 
         var pads: [PadRender] = []
-        var hits: [PadHit] = []
+        var hitGroups: [PadHitGroup] = []
 
         func quartzHit(fromLocal local: CGRect) -> QRect {
             let cocoaLocal = CGRect(x: local.minX, y: panelH - local.maxY,
@@ -97,6 +97,7 @@ struct PadStripGeometry {
             let inner = frame.insetBy(dx: 1.5, dy: 1.5)
 
             var regions: [PadRenderRegion] = []
+            var regionHits: [PadHit] = []
             for layout in group.layouts {
                 let regionRect: CGRect
                 switch layout.kind {
@@ -107,18 +108,11 @@ struct PadStripGeometry {
                 }
                 regions.append(PadRenderRegion(layoutID: layout.id, name: layout.name,
                                                rectLocal: regionRect))
-                if group.isGrouped {
-                    // Small outset for near-misses; overlapping expansions on
-                    // shared boundaries resolve by first-match, which is fine.
-                    hits.append(PadHit(layoutID: layout.id,
-                                       rectQ: quartzHit(fromLocal: regionRect).insetBy(dx: -4, dy: -4)))
-                }
+                regionHits.append(PadHit(
+                    layoutID: layout.id,
+                    rectQ: quartzHit(fromLocal: group.isGrouped ? regionRect : frame)))
             }
-            if !group.isGrouped, let only = group.layouts.first {
-                // Single layout: the whole pad is the drop target.
-                hits.append(PadHit(layoutID: only.id,
-                                   rectQ: quartzHit(fromLocal: frame).insetBy(dx: -6, dy: -6)))
-            }
+            hitGroups.append(PadHitGroup(frameQ: quartzHit(fromLocal: frame), hits: regionHits))
 
             pads.append(PadRender(
                 frameLocal: frame,
@@ -130,6 +124,6 @@ struct PadStripGeometry {
         }
 
         return PadStripGeometry(panelFrameC: panelFrameC, pads: pads,
-                                titleHeight: titleHeight, hits: hits)
+                                titleHeight: titleHeight, hitGroups: hitGroups)
     }
 }

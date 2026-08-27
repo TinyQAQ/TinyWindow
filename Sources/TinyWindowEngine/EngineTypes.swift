@@ -67,10 +67,18 @@ struct TargetWindow: @unchecked Sendable {
     let initialFrame: QRect
 }
 
-/// One pad's drop target, in Quartz global coordinates (already outset by slop).
+/// One drop region, in Quartz global coordinates.
 struct PadHit: Sendable {
     let layoutID: UUID
     let rectQ: QRect
+}
+
+/// One pad's full drop area: the pad frame plus its regions. The WHOLE pad is
+/// active — a cursor inside the frame that misses every region resolves to the
+/// nearest region, so small grouped regions (quarters) are forgiving.
+struct PadHitGroup: Sendable {
+    let frameQ: QRect
+    let hits: [PadHit]
 }
 
 /// Published by OverlayCoordinator whenever the strip is (re)shown; the token
@@ -79,7 +87,31 @@ struct PadHit: Sendable {
 struct PadHitSnapshot: Sendable {
     let token: UInt64
     let screenID: CGDirectDisplayID
-    let pads: [PadHit]
+    let groups: [PadHitGroup]
+
+    func layoutHit(at point: QPoint) -> PadHit? {
+        TinyWindowEngine.layoutHit(in: groups, at: point)
+    }
+}
+
+/// Exact region match first; otherwise, inside a pad frame (+10 pt slop),
+/// the nearest region wins.
+func layoutHit(in groups: [PadHitGroup], at point: QPoint) -> PadHit? {
+    for group in groups {
+        if let exact = group.hits.first(where: { $0.rectQ.contains(point) }) { return exact }
+    }
+    for group in groups where group.frameQ.insetBy(dx: -10, dy: -10).contains(point) {
+        return group.hits.min {
+            rectDistanceSquared(point, $0.rectQ) < rectDistanceSquared(point, $1.rectQ)
+        }
+    }
+    return nil
+}
+
+private func rectDistanceSquared(_ p: QPoint, _ r: QRect) -> CGFloat {
+    let dx = Swift.max(r.minX - p.x, 0, p.x - r.maxX)
+    let dy = Swift.max(r.minY - p.y, 0, p.y - r.maxY)
+    return dx * dx + dy * dy
 }
 
 enum ResolveVerdict: Sendable {

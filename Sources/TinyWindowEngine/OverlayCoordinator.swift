@@ -62,10 +62,11 @@ final class OverlayCoordinator {
         panel.hoveredLayoutID = nil
         panel.present(geometry: geometry)
         shared.padHits.withLock {
-            $0 = PadHitSnapshot(token: token, screenID: screenID, pads: geometry.hits)
+            $0 = PadHitSnapshot(token: token, screenID: screenID, groups: geometry.hitGroups)
         }
-        if let first = geometry.hits.first {
-            EngineDiagnostics.log("overlay: strip on screen=\(screenID) pads=\(geometry.hits.count) token=\(token) firstHitQ=(\(Int(first.rectQ.x)),\(Int(first.rectQ.y)),\(Int(first.rectQ.width)),\(Int(first.rectQ.height)))")
+        if let first = geometry.hitGroups.first {
+            let regions = geometry.hitGroups.reduce(0) { $0 + $1.hits.count }
+            EngineDiagnostics.log("overlay: strip on screen=\(screenID) pads=\(geometry.hitGroups.count) regions=\(regions) token=\(token) firstPadQ=(\(Int(first.frameQ.x)),\(Int(first.frameQ.y)),\(Int(first.frameQ.width)),\(Int(first.frameQ.height)))")
         }
     }
 

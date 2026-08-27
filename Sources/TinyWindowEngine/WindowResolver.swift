@@ -125,7 +125,7 @@ final class WindowResolver: @unchecked Sendable {
     private func scheduleSample(gen: UInt64, target: TargetWindow, windowID: CGWindowID,
                                 b0: QRect, m0: QPoint, lastSampleCursor: QPoint,
                                 samplesTaken: Int) {
-        queue.asyncAfter(deadline: .now() + .milliseconds(45)) { [self] in
+        queue.asyncAfter(deadline: .now() + .milliseconds(35)) { [self] in
             sampleNow(gen: gen, target: target, windowID: windowID, b0: b0, m0: m0,
                       lastSampleCursor: lastSampleCursor, samplesTaken: samplesTaken)
         }
@@ -136,9 +136,13 @@ final class WindowResolver: @unchecked Sendable {
                            samplesTaken: Int) {
         guard fresh(gen) else { return }
         let m = shared.cursor.withLock { $0 }
+        // A fast flick releases before identification completes; once the
+        // button is up no more travel is coming — evaluate what we have NOW
+        // (the controller may be holding a pending release for a retro-apply).
+        let buttonUp = !CGEventSource.buttonState(.combinedSessionState, button: .left)
 
         // No fresh travel since the last sample → cheap reschedule.
-        if samplesTaken > 0, m.distance(to: lastSampleCursor) < 10 {
+        if !buttonUp, samplesTaken > 0, m.distance(to: lastSampleCursor) < 10 {
             return scheduleSample(gen: gen, target: target, windowID: windowID, b0: b0,
                                   m0: m0, lastSampleCursor: lastSampleCursor,
                                   samplesTaken: samplesTaken)
@@ -170,6 +174,10 @@ final class WindowResolver: @unchecked Sendable {
                 EngineDiagnostics.log("resolve: rejected (window not following: dW=(\(Int(dW.dx)),\(Int(dW.dy))) dM=(\(Int(dM.dx)),\(Int(dM.dy))))")
                 return deliver(gen, .rejected)
             }
+        }
+        if buttonUp {
+            EngineDiagnostics.log("resolve: rejected (released before confirm, travel=\(Int(travel)))")
+            return deliver(gen, .rejected)
         }
         if taken >= 8 {
             EngineDiagnostics.log("resolve: rejected (sample cap)")

@@ -47,12 +47,22 @@ final class DragSessionController: @unchecked Sendable {
     }
 
     private let shared: EngineSharedState
+    /// A mouse-up that beat identification: the resolver keeps running (it
+    /// finalizes immediately on button-up) and a confirm landing within the
+    /// window still applies at the remembered release point.
+    private struct PendingRelease {
+        let cursor: QPoint
+        let at: TimeInterval
+        let generation: UInt64
+    }
+
     private var state: State = .idle
     private var generation: UInt64 = 0
     private var stripToken: UInt64 = 0
     private var optionDown = false
     private var watchdogIdleMisses = 0
     private var loggedFirstEvent = false
+    private var pendingRelease: PendingRelease?
 
     // Wired by TidyEngine after construction.
     var startIdentification: (@Sendable (_ generation: UInt64, _ downPoint: QPoint) -> Void)!
@@ -112,27 +122,67 @@ final class DragSessionController: @unchecked Sendable {
 
     /// Resolver verdict, delivered on the tap thread.
     func resolved(_ gen: UInt64, verdict: ResolveVerdict) {
-        guard case .identifying = state, gen == generation else { return }
-        switch verdict {
-        case .rejected:
-            state = .rejected
-        case .confirmed(let target):
-            let screens = shared.screens.withLock { $0 }
-            let cursor = shared.cursor.withLock { $0 }
-            guard let screen = screens.screen(containing: cursor) else {
+        if case .identifying = state, gen == generation {
+            switch verdict {
+            case .rejected:
                 state = .rejected
-                return
+            case .confirmed(let target):
+                let screens = shared.screens.withLock { $0 }
+                let cursor = shared.cursor.withLock { $0 }
+                guard let screen = screens.screen(containing: cursor) else {
+                    state = .rejected
+                    return
+                }
+                let session = Session(target: target, stripScreenID: screen.displayID)
+                state = .windowDrag(session)
+                emitEvent(.dragBegan)
+                updatePadVisibility(session)
             }
-            let session = Session(target: target, stripScreenID: screen.displayID)
-            state = .windowDrag(session)
-            emitEvent(.dragBegan)
-            updatePadVisibility(session)
+            return
         }
+        // Retroactive path: the confirm landed just after a fast-flick release.
+        guard let pending = pendingRelease, pending.generation == gen else { return }
+        pendingRelease = nil
+        guard case .confirmed(let target) = verdict,
+              ProcessInfo.processInfo.systemUptime - pending.at < 0.30 else { return }
+        retroApply(target: target, at: pending.cursor)
+    }
+
+    /// Applies a layout for a release that happened before pads ever showed —
+    /// the pad band's position is fixed per screen, so power users throw
+    /// windows at it from muscle memory. Only fires when the release point
+    /// actually lands inside a pad.
+    private func retroApply(target: TargetWindow, at point: QPoint) {
+        let config = shared.configuration.withLock { $0 }
+        guard config.settings.enabled else { return }
+        // Respect the visibility mode: never surprise-apply while the pads
+        // would have been hidden.
+        switch config.settings.padVisibilityMode {
+        case .holdOptionToShow: if !optionDown { return }
+        case .optionHides: if optionDown { return }
+        case .always: break
+        }
+        let screens = shared.screens.withLock { $0 }
+        guard let screen = screens.screen(containing: point) else { return }
+        let primaryHeight = CoordinateSpace.primaryHeight(cocoaScreenFrames: screens.map(\.frameC))
+        guard let geometry = PadStripGeometry.compute(
+                layouts: config.layouts, settings: config.settings,
+                screen: screen, primaryHeight: primaryHeight),
+              let hit = layoutHit(in: geometry.hitGroups, at: point),
+              let layout = config.layouts.first(where: { $0.id == hit.layoutID })
+        else {
+            EngineDiagnostics.log("drop: retro release missed pads at (\(Int(point.x)),\(Int(point.y)))")
+            return
+        }
+        EngineDiagnostics.log("drop: via=retro applying '\(layout.name)' on screen=\(screen.displayID)")
+        applyLayout(layout, target, screen)
+        emitEvent(.dragEnded)
     }
 
     // MARK: - Mouse handling
 
     private func mouseDown(at point: QPoint) {
+        pendingRelease = nil
         if case .idle = state {} else {
             // Spurious duplicate mouseDown — reset, then begin normally.
             forceCancel()
@@ -181,7 +231,7 @@ final class DragSessionController: @unchecked Sendable {
             if session.padsVisible, !session.cancelled {
                 if let snapshot, snapshot.token == stripToken,
                    snapshot.screenID == session.stripScreenID,
-                   let direct = snapshot.pads.first(where: { $0.rectQ.contains(cursor) })?.layoutID {
+                   let direct = snapshot.layoutHit(at: cursor)?.layoutID {
                     effectiveHover = direct
                     via = "direct"
                 } else if let hovered = session.hoveredLayoutID {
@@ -211,7 +261,13 @@ final class DragSessionController: @unchecked Sendable {
             EngineDiagnostics.log("drop: applying '\(layout.name)' on screen=\(screen.displayID)")
             applyLayout(layout, session.target, screen)
         case .identifying:
-            bumpGeneration() // drop the in-flight resolver result
+            // Fast flick: released before identification completed. Keep the
+            // resolver alive (it finalizes on button-up) — a confirm within
+            // 0.3s still applies at this release point.
+            pendingRelease = PendingRelease(
+                cursor: shared.cursor.withLock { $0 },
+                at: ProcessInfo.processInfo.systemUptime,
+                generation: generation)
             state = .idle
         case .pressed, .rejected:
             state = .idle
@@ -252,19 +308,18 @@ final class DragSessionController: @unchecked Sendable {
     private func refreshHover(_ session: Session, cursor: QPoint) {
         guard session.padsVisible, !session.cancelled else { return }
         let snapshot = shared.padHits.withLock { $0 }
-        var newHover: UUID?
+        var newHit: PadHit?
         if let snapshot, snapshot.token == stripToken, snapshot.screenID == session.stripScreenID {
-            newHover = snapshot.pads.first { $0.rectQ.contains(cursor) }?.layoutID
+            newHit = snapshot.layoutHit(at: cursor)
         }
+        let newHover = newHit?.layoutID
         if newHover != session.hoveredLayoutID {
             session.hoveredLayoutID = newHover
-            if let newHover {
+            if let newHover, let newHit {
                 session.graceHoverID = nil
-                if let hit = snapshot?.pads.first(where: { $0.layoutID == newHover }) {
-                    session.recentHover = RecentHover(
-                        id: newHover, rect: hit.rectQ,
-                        at: ProcessInfo.processInfo.systemUptime)
-                }
+                session.recentHover = RecentHover(
+                    id: newHover, rect: newHit.rectQ,
+                    at: ProcessInfo.processInfo.systemUptime)
             }
             EngineDiagnostics.log("hover: \(newHover?.uuidString.prefix(8) ?? "nil") cursor=(\(Int(cursor.x)),\(Int(cursor.y))) snapToken=\(snapshot?.token ?? 0) stripToken=\(stripToken)")
             overlaySetHover(newHover)
@@ -306,6 +361,7 @@ final class DragSessionController: @unchecked Sendable {
     /// idle vs absorbing-rejected). Always hides overlays — idempotent, cheap.
     private func forceCancel() {
         bumpGeneration()
+        pendingRelease = nil
         watchdogIdleMisses = 0
         let buttonDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
         state = buttonDown ? .rejected : .idle
