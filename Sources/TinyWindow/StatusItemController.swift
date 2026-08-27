@@ -104,11 +104,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         recover.isEnabled = environment.lastHealth == .running && capturedFrontmostPID != nil
         menu.addItem(.separator())
 
-        if WindowTidyImporter.dataFileExists() {
-            let importItem = menu.addItem(withTitle: "重新导入 Window Tidy 布局",
-                                          action: #selector(reimportWT), keyEquivalent: "")
-            importItem.target = self
-        }
         let login = menu.addItem(withTitle: "登录时启动",
                                  action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self
@@ -156,10 +151,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func moveWindowToCursorScreen() {
         try? environment.engine.moveFrontmostWindowToCursorScreen(pid: capturedFrontmostPID)
-    }
-
-    @objc private func reimportWT() {
-        environment.performWTImport(replaceExisting: true)
     }
 
     @objc private func toggleLaunchAtLogin() {

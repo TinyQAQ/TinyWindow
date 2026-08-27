@@ -93,25 +93,4 @@ final class SettingsModel: ObservableObject {
         layouts.move(fromOffsets: source, toOffset: destination)
     }
 
-    // MARK: - Window Tidy import
-
-    var wtDataExists: Bool { WindowTidyImporter.dataFileExists() }
-
-    func wtPreview() -> WTImportResult? {
-        try? WindowTidyImporter.importFile()
-    }
-
-    var lastImportHash: String? { environment.prefs.lastWTImportHash }
-
-    /// Returns a user-facing result message.
-    func importWT(replace: Bool) -> String {
-        let before = layouts.count
-        if environment.performWTImport(replaceExisting: replace) {
-            refreshFromEnvironment()
-            return replace
-                ? "已导入 \(layouts.count) 个布局（替换原有布局）。"
-                : "已追加 \(layouts.count - before) 个布局。"
-        }
-        return "导入失败，详见弹窗。"
-    }
 }

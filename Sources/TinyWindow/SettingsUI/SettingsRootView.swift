@@ -11,8 +11,6 @@ struct SettingsRootView: View {
                 .tabItem { Label("通用", systemImage: "gearshape") }
             LayoutsTab(model: model)
                 .tabItem { Label("布局", systemImage: "rectangle.3.group") }
-            ImportTab(model: model)
-                .tabItem { Label("导入", systemImage: "square.and.arrow.down") }
         }
         .frame(minWidth: 640, minHeight: 480)
     }
