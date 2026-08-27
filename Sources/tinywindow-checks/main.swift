@@ -1,0 +1,6 @@
+runGridMathChecks()
+runLayoutResolverChecks()
+runCoordinateSpaceChecks()
+runWindowTidyImporterChecks()
+runLayoutStoreChecks()
+Checks.summaryAndExit()
