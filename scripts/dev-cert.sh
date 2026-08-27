@@ -15,6 +15,10 @@
 #   /System/Library/CoreServices/Applications/ and often refuses scripted
 #   trust changes — the manual trust fallback below is precise for it.
 set -euo pipefail
+# macOS 自带 bash 3.2 在部分 locale 下会把紧邻 ${VAR} 的全角字符首字节
+# 吞进变量名（配合 set -u 直接报 unbound variable）。统一 UTF-8 兜底，
+# 且下文所有变量一律 ${NAME} 带花括号锁边界。
+export LC_ALL=en_US.UTF-8
 
 NAME="${1:-TinyWindow Dev}"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
@@ -23,7 +27,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 sign_test() {
   cp -f /bin/ls "$TMP/signtest"
-  codesign --force --sign "$NAME" "$TMP/signtest" 2>"$TMP/sign.err"
+  codesign --force --sign "${NAME}" "$TMP/signtest" 2>"$TMP/sign.err"
 }
 
 manual_trust_help() {
@@ -31,13 +35,13 @@ manual_trust_help() {
   echo "还差最后一步——手动设置信任（约 20 秒）："
   echo "  1. 打开钥匙串访问（macOS 26 里被隐藏了，不是「密码」App）："
   echo "       open \"/System/Library/CoreServices/Applications/Keychain Access.app\""
-  echo "  2. 左侧选「登录」，上方分类选「证书」，双击「$NAME」"
+  echo "  2. 左侧选「登录」，上方分类选「证书」，双击「${NAME}」"
   echo "  3. 展开「信任」→「代码签名」选「始终信任」→ 关闭小窗 → 输入登录密码确认"
   echo "  4. 重新运行本脚本验证：bash scripts/dev-cert.sh"
 }
 
-if security find-certificate -c "$NAME" >/dev/null 2>&1; then
-  echo "证书「$NAME」已在钥匙串中，直接验证能否签名…"
+if security find-certificate -c "${NAME}" >/dev/null 2>&1; then
+  echo "证书「${NAME}」已在钥匙串中，直接验证能否签名…"
   echo "（如果弹出「codesign 想要使用密钥」，请点「始终允许」）"
   if sign_test; then
     echo "✔ 一切就绪！运行 make run 重新构建即可。"
@@ -55,7 +59,7 @@ distinguished_name = dn
 x509_extensions = v3_code
 prompt = no
 [dn]
-CN = $NAME
+CN = ${NAME}
 [v3_code]
 keyUsage = critical,digitalSignature
 extendedKeyUsage = critical,codeSigning
@@ -74,7 +78,7 @@ security add-trusted-cert -p codeSign -k "$KEYCHAIN" "$TMP/cert.pem" 2>/dev/null
 
 echo "→ 实际验签测试…（如弹出「codesign 想要使用密钥」，请点「始终允许」）"
 if sign_test; then
-  echo "✔ 完成！「$NAME」可用于签名。运行 make run 重新构建即可。"
+  echo "✔ 完成！「${NAME}」可用于签名。运行 make run 重新构建即可。"
   exit 0
 fi
 
