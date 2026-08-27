@@ -1,0 +1,22 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checks
+        run: swift run tinywindow-checks
+      - name: Build release zip
+        run: CODESIGN_ID=- scripts/release.sh
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" dist/TinyWindow-*.zip dist/*.sha256 --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -15,19 +15,27 @@ final class AppEnvironment {
     private var statusItem: StatusItemController?
     private var gate: AccessibilityGate?
     private var eventsTask: Task<Void, Never>?
+    private var settingsController: SettingsWindowController?
+    private var onboardingController: OnboardingWindowController?
+    /// Set by the settings window so external changes (menu re-import,
+    /// onboarding import) refresh its list.
+    var layoutsDidChangeExternally: (() -> Void)?
 
     static let legacyWTBundleID = "com.lightpillar.Window-Tidy"
 
     func bootstrap() {
         prefs.onChange = { [weak self] in self?.settingsChanged() }
+        statusItem = StatusItemController(environment: self) // icon first, always
         loadLayouts()
-        statusItem = StatusItemController(environment: self)
         subscribeToEngineEvents()
 
         if AccessibilityGate.isTrusted {
             startEngine()
         } else {
             beginAccessibilityGate()
+        }
+        if !prefs.firstRunCompleted {
+            showOnboarding()
         }
     }
 
@@ -42,25 +50,8 @@ final class AppEnvironment {
             presentAlert(title: "无法读取布局文件",
                          text: "layouts.json 读取失败，本次会话将从内存布局开始。\n\(error)")
         }
-        if layouts.isEmpty {
-            seedInitialLayouts()
-        }
-    }
-
-    private func seedInitialLayouts() {
-        if WindowTidyImporter.dataFileExists(), !prefs.wtImportPromptShown {
-            prefs.wtImportPromptShown = true
-            let alert = NSAlert()
-            alert.messageText = "发现 Window Tidy 布局"
-            alert.informativeText = "检测到旧版 Window Tidy 的布局数据，要把它们原样导入 TinyWindow 吗？（Option 键模式、标题显示等偏好也会一并迁移）"
-            alert.addButton(withTitle: "导入")
-            alert.addButton(withTitle: "使用默认布局")
-            if alert.runModal() == .alertFirstButtonReturn {
-                if performWTImport(replaceExisting: true) { return }
-            }
-        }
-        layouts = LayoutDefaults.starterSet()
-        persistLayouts()
+        // First run seeds through onboarding (import or defaults). A completed
+        // setup with an empty list is respected as the user's choice.
     }
 
     /// Returns true on success. Applies the imported global preferences too.
@@ -99,6 +90,7 @@ final class AppEnvironment {
             NSLog("LayoutStore save failed: \(error)")
         }
         pushConfiguration()
+        layoutsDidChangeExternally?()
     }
 
     // MARK: - Engine
@@ -152,7 +144,8 @@ final class AppEnvironment {
     }
 
     private func warnIfLegacyWTRunning() {
-        guard legacyWTRunning, !prefs.legacyWTWarningShown else { return }
+        // During first run the onboarding window carries this warning instead.
+        guard prefs.firstRunCompleted, legacyWTRunning, !prefs.legacyWTWarningShown else { return }
         prefs.legacyWTWarningShown = true
         let alert = NSAlert()
         alert.messageText = "旧版 Window Tidy 正在运行"
@@ -168,7 +161,40 @@ final class AppEnvironment {
     }
 
     func showSettings() {
-        // Settings window lands in M5; menu item is disabled until then.
+        if settingsController == nil {
+            settingsController = SettingsWindowController(environment: self)
+        }
+        settingsController?.show()
+    }
+
+    // MARK: - Onboarding
+
+    func showOnboarding() {
+        if onboardingController == nil {
+            onboardingController = OnboardingWindowController(environment: self)
+        }
+        onboardingController?.show()
+    }
+
+    func finishOnboarding(importedLayouts: Bool) {
+        if layouts.isEmpty, !importedLayouts {
+            layouts = LayoutDefaults.starterSet()
+            persistLayouts()
+        }
+        prefs.firstRunCompleted = true
+        onboardingController?.close()
+    }
+
+    /// Closing the window with ⨯ counts as finishing (defaults get seeded so
+    /// the app is usable immediately).
+    func onboardingWindowClosed() {
+        if !prefs.firstRunCompleted {
+            if layouts.isEmpty {
+                layouts = LayoutDefaults.starterSet()
+                persistLayouts()
+            }
+            prefs.firstRunCompleted = true
+        }
     }
 
     private func presentAlert(title: String, text: String) {

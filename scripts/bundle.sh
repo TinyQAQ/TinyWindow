@@ -33,7 +33,10 @@ done
 # Sign with the stable dev identity when present; ad-hoc otherwise.
 # Ad-hoc means a new cdhash-based designated requirement per build, so the
 # Accessibility grant silently dies on every rebuild — see README.
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "$CODESIGN_ID"; then
+if [ "$CODESIGN_ID" = "-" ]; then
+  codesign --force --timestamp=none --identifier com.tinyqaq.TinyWindow --sign - "$APP"
+  echo "Signed ad-hoc (CODESIGN_ID=-)."
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "$CODESIGN_ID"; then
   codesign --force --timestamp=none --identifier com.tinyqaq.TinyWindow \
     --sign "$CODESIGN_ID" "$APP"
   echo "Signed with '$CODESIGN_ID' (stable designated requirement)."

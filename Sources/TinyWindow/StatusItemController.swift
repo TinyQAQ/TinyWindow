@@ -114,8 +114,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         login.target = self
         login.state = LaunchAtLogin.isEnabled ? .on : .off
 
-        let settings = menu.addItem(withTitle: "设置…", action: nil, keyEquivalent: ",")
-        settings.isEnabled = false // arrives with the Settings window milestone
+        let settings = menu.addItem(withTitle: "设置…", action: #selector(openSettings),
+                                    keyEquivalent: ",")
+        settings.target = self
 
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: "退出 TinyWindow",
@@ -167,5 +168,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func openAccessibilitySettings() {
         AccessibilityGate.openSystemSettings()
+    }
+
+    @objc private func openSettings() {
+        environment.showSettings()
     }
 }

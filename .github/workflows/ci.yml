@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    # macOS 26 SDK required (LSMinimumSystemVersion 26.0).
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain drift canary
+        run: swift --version
+      - name: Build
+        run: swift build -c release
+      - name: Checks
+        run: swift run tinywindow-checks
+      - name: Bundle app (ad-hoc signed)
+        run: make app CODESIGN_ID=-
+      - name: Zip
+        run: ditto -c -k --keepParent dist/TinyWindow.app dist/TinyWindow.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TinyWindow
+          path: dist/TinyWindow.zip
