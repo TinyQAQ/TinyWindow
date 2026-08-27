@@ -29,7 +29,7 @@ The original is Intel-only and dies with Rosetta 2 (macOS 27 is its last stop). 
 
 ### Install
 
-1. Download `TinyWindow-x.y.z.zip` from [Releases](https://github.com/TinyQAQ/TinyWindow/releases), unzip, move to `/Applications`.
+1. Download `TinyWindow-x.y.z.dmg` from [Releases](https://github.com/TinyQAQ/TinyWindow/releases), open it, and drag **TinyWindow** into **Applications** (a zip is also provided).
 2. Gatekeeper will block the unsigned build: System Settings → Privacy & Security → scroll to "TinyWindow was blocked" → **Open Anyway** (or `xattr -d com.apple.quarantine /Applications/TinyWindow.app`).
 3. Grant **Accessibility** permission when prompted (required to move other apps' windows). Note: each release update resets this grant — a known limitation of unsigned builds.
 4. Recommended: System Settings → Desktop & Dock → turn **off** "Drag windows to screen edges to tile", so the OS tiling preview doesn't fight the pads.
@@ -79,7 +79,7 @@ Window Tidy（Light Pillar，2017 年停止开发）有一个至今没有被好�
 
 ### 安装
 
-1. 从 [Releases](https://github.com/TinyQAQ/TinyWindow/releases) 下载 zip，解压后移到「应用程序」。
+1. 从 [Releases](https://github.com/TinyQAQ/TinyWindow/releases) 下载 `TinyWindow-x.y.z.dmg`，打开后把 **TinyWindow** 拖进 **Applications**（也提供 zip）。
 2. Gatekeeper 会拦截未签名构建：系统设置 → 隐私与安全性 → 找到"已阻止 TinyWindow" → **仍要打开**（或执行 `xattr -d com.apple.quarantine /Applications/TinyWindow.app`）。
 3. 按提示授予**辅助功能**权限（移动其他 App 窗口所必需）。注意：每次更新版本都需重新授权，这是未签名构建的已知限制。
 4. 建议：系统设置 → 桌面与程序坞 → 关闭"将窗口拖到屏幕边缘时平铺"，避免系统平铺预览和 pad 打架。

@@ -14,9 +14,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Checks
         run: swift run tinywindow-checks
-      - name: Build release zip
+      - name: Build release artifacts (dmg + zip)
         run: CODESIGN_ID=- scripts/release.sh
-      - name: Create GitHub release
-        run: gh release create "$GITHUB_REF_NAME" dist/TinyWindow-*.zip dist/*.sha256 --generate-notes
+      - name: Create or update GitHub release
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/TinyWindow-*.dmg dist/TinyWindow-*.zip dist/*.sha256 --generate-notes \
+          || gh release upload "$GITHUB_REF_NAME" \
+            dist/TinyWindow-*.dmg dist/TinyWindow-*.zip dist/*.sha256 --clobber
         env:
           GH_TOKEN: ${{ github.token }}

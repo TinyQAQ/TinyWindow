@@ -23,6 +23,9 @@ icons:
 release:
 	scripts/release.sh
 
+dmg:
+	scripts/make-dmg.sh
+
 doctor:
 	@echo "swift:            $$(swift --version 2>&1 | head -1)"
 	@if security find-identity -v -p codesigning 2>/dev/null | grep -q "$(CODESIGN_ID)"; then \
