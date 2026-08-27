@@ -46,9 +46,19 @@ public final class TidyEngine {
         controller.applyLayout = { layout, target, screen in
             applier.apply(layout, to: target, on: screen)
         }
-        controller.overlayShow = { screenID, token in
+        controller.overlayShow = { [weak self] screenID, token in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { overlay.showStrip(on: screenID, token: token) }
+                MainActor.assumeIsolated {
+                    // visibleFrames are dynamic (Dock migrates between
+                    // displays, menu bar hides on inactive ones) — refresh
+                    // right before every presentation so drops never tile
+                    // under the Dock from a stale snapshot.
+                    if let self {
+                        self.screenTracker.rebuild()
+                        overlay.refreshScreens(self.screenTracker.snapshots)
+                    }
+                    overlay.showStrip(on: screenID, token: token)
+                }
             }
         }
         controller.overlayHideAll = {
@@ -130,6 +140,7 @@ public final class TidyEngine {
     public func applyLayout(_ layout: Layout, toFrontmostWindowOf pid: pid_t?) throws {
         guard AX.isTrusted() else { throw EngineError.accessibilityNotGranted }
         guard let pid else { throw EngineError.noTargetWindow }
+        if started { screenTracker.rebuild() } // fresh visibleFrames (Dock/menu bar move)
         let screens = shared.screens.withLock { $0 }
         let continuation = eventsContinuation
         axQueue.async {
@@ -152,6 +163,7 @@ public final class TidyEngine {
     public func moveFrontmostWindowToCursorScreen(pid: pid_t?) throws {
         guard AX.isTrusted() else { throw EngineError.accessibilityNotGranted }
         guard let pid else { throw EngineError.noTargetWindow }
+        if started { screenTracker.rebuild() } // fresh visibleFrames (Dock/menu bar move)
         let screens = shared.screens.withLock { $0 }
         guard let cursorEvent = CGEvent(source: nil) else { return }
         let cursor = QPoint(rawQuartz: cursorEvent.location)

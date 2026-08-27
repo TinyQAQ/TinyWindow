@@ -19,12 +19,22 @@ final class DragSessionController: @unchecked Sendable {
         case rejected
     }
 
+    private struct RecentHover {
+        let id: UUID
+        let rect: QRect
+        let at: TimeInterval
+    }
+
     private final class Session {
         let target: TargetWindow
         var stripScreenID: CGDirectDisplayID
         var hoveredLayoutID: UUID?
         var padsVisible = false
         var cancelled = false
+        /// Releasing the mouse often twitches the cursor a few px off a small
+        /// region right before mouseUp — remember the last real hover briefly
+        /// so the drop the user SAW highlighted still lands.
+        var recentHover: RecentHover?
         /// holdOptionToShow only: users release ⌥ a beat before the mouse.
         /// Remember the hover through that gap so the drop still lands.
         var graceHoverID: UUID?
@@ -159,11 +169,37 @@ final class DragSessionController: @unchecked Sendable {
             // pin overlay state.
             overlayHideAll()
             defer { emitEvent(.dragEnded) }
-            // Live hover wins; a ⌥-release within the grace window still counts.
-            let graceActive = ProcessInfo.processInfo.systemUptime < session.graceUntil
-            let effectiveHover = session.hoveredLayoutID
-                ?? (graceActive ? session.graceHoverID : nil)
-            EngineDiagnostics.log("drop: padsVisible=\(session.padsVisible) hovered=\(session.hoveredLayoutID?.uuidString.prefix(8) ?? "nil") grace=\(graceActive ? session.graceHoverID?.uuidString.prefix(8) ?? "nil" : "expired") cancelled=\(session.cancelled)")
+            // The RELEASE POINT is ground truth: hit-test the mouseUp location
+            // directly (the async view highlight can lag either way). Fall back
+            // to the tracked hover, then to a brief sticky window for the
+            // release-twitch case, then to the ⌥-release grace.
+            let now = ProcessInfo.processInfo.systemUptime
+            let cursor = shared.cursor.withLock { $0 }
+            let snapshot = shared.padHits.withLock { $0 }
+            var effectiveHover: UUID?
+            var via = "none"
+            if session.padsVisible, !session.cancelled {
+                if let snapshot, snapshot.token == stripToken,
+                   snapshot.screenID == session.stripScreenID,
+                   let direct = snapshot.pads.first(where: { $0.rectQ.contains(cursor) })?.layoutID {
+                    effectiveHover = direct
+                    via = "direct"
+                } else if let hovered = session.hoveredLayoutID {
+                    effectiveHover = hovered
+                    via = "session"
+                } else if let recent = session.recentHover,
+                          now - recent.at < 0.35,
+                          recent.rect.insetBy(dx: -40, dy: -40).contains(cursor) {
+                    effectiveHover = recent.id
+                    via = "recent"
+                }
+            }
+            if effectiveHover == nil, !session.cancelled,
+               now < session.graceUntil, let grace = session.graceHoverID {
+                effectiveHover = grace
+                via = "optionGrace"
+            }
+            EngineDiagnostics.log("drop: via=\(via) hovered=\(effectiveHover?.uuidString.prefix(8) ?? "nil") cursor=(\(Int(cursor.x)),\(Int(cursor.y))) cancelled=\(session.cancelled)")
             guard !session.cancelled, let layoutID = effectiveHover else { return }
             let config = shared.configuration.withLock { $0 }
             let screens = shared.screens.withLock { $0 }
@@ -222,7 +258,14 @@ final class DragSessionController: @unchecked Sendable {
         }
         if newHover != session.hoveredLayoutID {
             session.hoveredLayoutID = newHover
-            if newHover != nil { session.graceHoverID = nil }
+            if let newHover {
+                session.graceHoverID = nil
+                if let hit = snapshot?.pads.first(where: { $0.layoutID == newHover }) {
+                    session.recentHover = RecentHover(
+                        id: newHover, rect: hit.rectQ,
+                        at: ProcessInfo.processInfo.systemUptime)
+                }
+            }
             EngineDiagnostics.log("hover: \(newHover?.uuidString.prefix(8) ?? "nil") cursor=(\(Int(cursor.x)),\(Int(cursor.y))) snapToken=\(snapshot?.token ?? 0) stripToken=\(stripToken)")
             overlaySetHover(newHover)
         }

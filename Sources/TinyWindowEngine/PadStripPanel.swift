@@ -87,6 +87,12 @@ final class PadStripPanel {
 final class PadStripView: NSView {
     override var isFlipped: Bool { true }
 
+    /// Region hues for grouped pads — high mutual contrast on the dark body.
+    static let regionPalette: [NSColor] = [
+        .systemBlue, .systemGreen, .systemOrange, .systemPurple,
+        .systemTeal, .systemPink, .systemYellow, .systemIndigo,
+    ]
+
     private var pads: [PadRender] = []
     private var titleHeight: CGFloat = 0
 
@@ -102,8 +108,6 @@ final class PadStripView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let accent = NSColor.controlAccentColor
-
         for pad in pads {
             let padHovered = pad.regions.contains { $0.layoutID == hoveredLayoutID }
 
@@ -135,16 +139,26 @@ final class PadStripView: NSView {
                 gridPath.stroke()
             }
 
-            // Regions.
-            for region in pad.regions {
+            // Regions: distinct hue per region so grouped pads read at a
+            // glance ("which layouts live in this pad").
+            for (regionIndex, region) in pad.regions.enumerated() {
                 let hovered = region.layoutID == hoveredLayoutID
+                let hue = Self.regionPalette[regionIndex % Self.regionPalette.count]
                 let path = NSBezierPath(roundedRect: region.rectLocal.insetBy(dx: 1, dy: 1),
                                         xRadius: 4, yRadius: 4)
-                accent.withAlphaComponent(hovered ? 0.92 : 0.42).setFill()
+                hue.withAlphaComponent(hovered ? 0.95 : 0.60).setFill()
                 path.fill()
-                accent.withAlphaComponent(hovered ? 1.0 : 0.8).setStroke()
-                path.lineWidth = hovered ? 2 : 1
+                hue.withAlphaComponent(hovered ? 1.0 : 0.9).setStroke()
+                path.lineWidth = hovered ? 1.5 : 1
                 path.stroke()
+                if hovered {
+                    // White ring so the active choice pops on any hue.
+                    let ring = NSBezierPath(roundedRect: region.rectLocal.insetBy(dx: -0.5, dy: -0.5),
+                                            xRadius: 5, yRadius: 5)
+                    NSColor.white.withAlphaComponent(0.95).setStroke()
+                    ring.lineWidth = 2
+                    ring.stroke()
+                }
             }
 
             // Label: the hovered layout's name wins over the group label.

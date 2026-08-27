@@ -35,6 +35,13 @@ final class OverlayCoordinator {
         hideAll() // config changes mid-drag are rare; a clean reset is always safe
     }
 
+    /// Lightweight snapshot refresh (visibleFrames are dynamic: the Dock
+    /// migrates between displays and the menu bar hides on inactive ones).
+    /// Panels persist — they are re-framed on every present anyway.
+    func refreshScreens(_ snapshots: [ScreenSnapshot]) {
+        screens = snapshots
+    }
+
     func showStrip(on screenID: CGDirectDisplayID, token: UInt64) {
         guard let screen = screens.screen(withID: screenID), !layouts.isEmpty else { return }
         if let current = currentScreenID, current != screenID {
@@ -45,9 +52,13 @@ final class OverlayCoordinator {
         currentScreenID = screenID
         let primaryHeight = CoordinateSpace.primaryHeight(cocoaScreenFrames: screens.map(\.frameC))
         guard let geometry = PadStripGeometry.compute(
-            layouts: layouts, settings: settings, screen: screen, primaryHeight: primaryHeight),
-            let panel = panels[screenID]
+            layouts: layouts, settings: settings, screen: screen, primaryHeight: primaryHeight)
         else { return }
+        let panel = panels[screenID] ?? {
+            let created = PadStripPanel()
+            panels[screenID] = created
+            return created
+        }()
         panel.hoveredLayoutID = nil
         panel.present(geometry: geometry)
         shared.padHits.withLock {
