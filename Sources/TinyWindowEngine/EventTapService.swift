@@ -24,11 +24,15 @@ final class EventTapService: @unchecked Sendable {
     /// Returns false when the tap cannot be created (Accessibility not granted).
     func start(controller: DragSessionController) -> Bool {
         guard tap == nil else { return true }
+        // Pure-mouse mask, deliberately: flagsChanged is a KEYBOARD-class
+        // event, and listening to any keyboard event silently requires the
+        // separate Input Monitoring permission on modern macOS — without it
+        // the tap looks healthy but receives NOTHING. Option-key state is
+        // read from the mouse events' own flags plus a cheap flagsState poll.
         let mask: CGEventMask =
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.leftMouseDragged.rawValue) |
-            (1 << CGEventType.leftMouseUp.rawValue) |
-            (1 << CGEventType.flagsChanged.rawValue)
+            (1 << CGEventType.leftMouseUp.rawValue)
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .tailAppendEventTap,
@@ -98,8 +102,6 @@ private func tinyWindowTapCallback(
     case .tapDisabledByTimeout, .tapDisabledByUserInput:
         EngineDiagnostics.log("tap: DISABLED by \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
         controller.tapWasDisabled()
-    case .flagsChanged:
-        controller.optionChanged(event.flags.contains(.maskAlternate))
     case .leftMouseDown, .leftMouseDragged, .leftMouseUp:
         controller.handleMouse(
             type,

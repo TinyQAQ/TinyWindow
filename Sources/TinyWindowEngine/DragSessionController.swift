@@ -42,6 +42,7 @@ final class DragSessionController: @unchecked Sendable {
     private var stripToken: UInt64 = 0
     private var optionDown = false
     private var watchdogIdleMisses = 0
+    private var loggedFirstEvent = false
 
     // Wired by TidyEngine after construction.
     var startIdentification: (@Sendable (_ generation: UInt64, _ downPoint: QPoint) -> Void)!
@@ -59,6 +60,10 @@ final class DragSessionController: @unchecked Sendable {
     // MARK: - Event entry points (tap thread)
 
     func handleMouse(_ type: CGEventType, location: QPoint, optionDown flag: Bool) {
+        if !loggedFirstEvent {
+            loggedFirstEvent = true
+            EngineDiagnostics.log("tap: events flowing (first mouse event)")
+        }
         shared.cursor.withLock { $0 = location }
         optionDown = flag
         switch type {
@@ -66,14 +71,6 @@ final class DragSessionController: @unchecked Sendable {
         case .leftMouseDragged: mouseDragged(to: location)
         case .leftMouseUp: mouseUp()
         default: break
-        }
-    }
-
-    func optionChanged(_ down: Bool) {
-        optionDown = down
-        if case .windowDrag(let session) = state, !session.cancelled {
-            updatePadVisibility(session)
-            refreshHover(session, cursor: shared.cursor.withLock { $0 })
         }
     }
 
@@ -197,6 +194,11 @@ final class DragSessionController: @unchecked Sendable {
         }
         guard !session.cancelled else { return }
 
+        // The tap is mouse-only (no flagsChanged — that's a keyboard-class
+        // event with its own permission gate), so refresh ⌥ from a cheap
+        // WindowServer state poll; a stationary press registers on the next
+        // pointer twitch, same as Escape.
+        optionDown = CGEventSource.flagsState(.combinedSessionState).contains(.maskAlternate)
         updatePadVisibility(session)
 
         let screens = shared.screens.withLock { $0 }

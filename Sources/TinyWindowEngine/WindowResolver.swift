@@ -44,6 +44,12 @@ final class WindowResolver: @unchecked Sendable {
             return deliver(gen, .rejected)
         }
 
+        // Front-to-back scan for the first NORMAL (layer 0) window under the
+        // point. Non-zero layers are SKIPPED, not rejected: the Dock owns a
+        // full-screen transparent gesture window (layer 20, alpha 1) covering
+        // the entire main display, and overlays/menus float everywhere. A drag
+        // that genuinely started on the Dock or a menu is caught later by the
+        // follow check — the layer-0 window underneath won't track the mouse.
         var hitPID: pid_t?
         var windowID: CGWindowID = 0
         var startBounds: QRect?
@@ -52,19 +58,16 @@ final class WindowResolver: @unchecked Sendable {
             guard let boundsDict = entry[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict),
                   bounds.contains(down.rawQuartz) else { continue }
-            // Topmost window under the point. Only normal windows qualify —
-            // layer != 0 kills menus, status items, the Dock, overlays.
-            guard (entry[kCGWindowLayer as String] as? Int) == 0,
-                  let ownerPID = entry[kCGWindowOwnerPID as String] as? Int else {
-                return deliver(gen, .rejected)
-            }
+            guard (entry[kCGWindowLayer as String] as? Int) == 0 else { continue }
+            guard let ownerPID = entry[kCGWindowOwnerPID as String] as? Int,
+                  pid_t(ownerPID) != ownPID else { continue }
             hitPID = pid_t(ownerPID)
             windowID = CGWindowID((entry[kCGWindowNumber as String] as? Int) ?? 0)
             startBounds = QRect(rawQuartz: bounds)
             break
         }
-        guard let hitPID, hitPID != ownPID, let startBounds, windowID != 0 else {
-            EngineDiagnostics.log("resolve: rejected (no normal window under downPoint / own window)")
+        guard let hitPID, let startBounds, windowID != 0 else {
+            EngineDiagnostics.log("resolve: rejected (no normal window under downPoint)")
             return deliver(gen, .rejected)
         }
 
