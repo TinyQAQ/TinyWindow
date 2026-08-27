@@ -356,8 +356,13 @@ final class DragSessionController: @unchecked Sendable {
 
     // MARK: - Three-finger-lift early apply
 
+    /// Silence long enough to mean "fingers are off the trackpad". Tuned by
+    /// feel: 0.2s fired during natural aiming pauses; 0.35s is calm but still
+    /// clearly ahead of the OS's 0.5–0.8s synthetic mouseUp.
+    private static let earlyApplyQuiet: TimeInterval = 0.35
+
     private func armEarlyApply(_ token: UInt64) {
-        scheduleOnTapThread(0.20) { [weak self] in
+        scheduleOnTapThread(Self.earlyApplyQuiet + 0.02) { [weak self] in
             self?.earlyApplyCheck(token)
         }
     }
@@ -368,9 +373,9 @@ final class DragSessionController: @unchecked Sendable {
               session.isTouchDrag, !session.cancelled, !session.earlyApplied,
               session.padsVisible, let hover = session.hoveredLayoutID else { return }
         let quiet = ProcessInfo.processInfo.systemUptime - lastDragEventAt
-        if quiet < 0.18 {
+        if quiet < Self.earlyApplyQuiet {
             // Still trembling — fingers are on the pad; keep watching.
-            scheduleOnTapThread(Swift.max(0.05, 0.20 - quiet)) { [weak self] in
+            scheduleOnTapThread(Swift.max(0.05, Self.earlyApplyQuiet + 0.02 - quiet)) { [weak self] in
                 self?.earlyApplyCheck(token)
             }
             return
