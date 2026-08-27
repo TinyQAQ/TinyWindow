@@ -32,6 +32,11 @@ final class WindowResolver: @unchecked Sendable {
         shared.resolverGeneration.load(ordering: .relaxed) == generation
     }
 
+    private func roughlyEqual(_ a: QRect, _ b: QRect) -> Bool {
+        abs(a.x - b.x) <= 5 && abs(a.y - b.y) <= 5 &&
+        abs(a.width - b.width) <= 5 && abs(a.height - b.height) <= 5
+    }
+
     private func run(generation gen: UInt64, downPoint down: QPoint) {
         guard fresh(gen) else { return }
 
@@ -85,8 +90,24 @@ final class WindowResolver: @unchecked Sendable {
         // (Electron) freeze their AX-reported position during a native drag.
         guard fresh(gen) else { return }
         guard let element = AX.element(at: down),
-              let window = AX.window(containing: element)
+              var window = AX.window(containing: element)
         else { return deliver(gen, .rejected) }
+
+        // Identity check: the AX hit-test can land on an app's full-desktop
+        // window instead of the one being dragged (Finder's desktop spans all
+        // displays and contains every point). The CG bounds are ground truth —
+        // if the AX frame disagrees, find the app window that matches them.
+        if let axFrame = AX.frame(of: window), !roughlyEqual(axFrame, startBounds) {
+            if let match = AX.windows(pid: hitPID).first(where: { candidate in
+                AX.frame(of: candidate).map { roughlyEqual($0, startBounds) } ?? false
+            }) {
+                window = match
+                EngineDiagnostics.log("resolve: AX hit-test window mismatched CG bounds (\(Int(axFrame.width))×\(Int(axFrame.height))) — re-matched by frame")
+            } else {
+                EngineDiagnostics.log("resolve: rejected (no AX window matches CG bounds \(Int(startBounds.width))×\(Int(startBounds.height)))")
+                return deliver(gen, .rejected)
+            }
+        }
 
         let target = TargetWindow(
             window: window,

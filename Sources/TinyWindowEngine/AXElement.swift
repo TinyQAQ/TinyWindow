@@ -73,6 +73,16 @@ enum AX {
         AXElement(raw: AXUIElementCreateApplication(pid))
     }
 
+    /// All AX windows of an app.
+    static func windows(pid: pid_t) -> [AXElement] {
+        guard let ref = copyAttribute(appElement(pid: pid), kAXWindowsAttribute),
+              CFGetTypeID(ref) == CFArrayGetTypeID(),
+              let array = ref as? [AnyObject] else { return [] }
+        return array.compactMap {
+            CFGetTypeID($0) == AXUIElementGetTypeID() ? AXElement(raw: $0 as! AXUIElement) : nil
+        }
+    }
+
     /// Focused window of an app, falling back to main window, then first window.
     static func focusedWindow(pid: pid_t) -> AXElement? {
         let app = appElement(pid: pid)

@@ -73,11 +73,17 @@ final class LayoutApplier: @unchecked Sendable {
         }
 
         // Tolerate app-imposed geometry (Terminal cell rounding, min/max sizes)
-        // but keep the top-left corner honest.
+        // but keep the top-left corner honest. A read-back wildly larger than
+        // the request means we're looking at the wrong window or a bogus AX
+        // frame — never "repair" that.
         if let actual = AX.frame(of: target.window),
            abs(actual.width - rect.width) > 2 || abs(actual.height - rect.height) > 2 {
-            AX.setPosition(rect.origin, of: target.window)
-            EngineDiagnostics.log("apply: ok, app kept size (\(Int(actual.width))×\(Int(actual.height))), origin repaired")
+            if actual.width <= rect.width * 1.6, actual.height <= rect.height * 1.6 {
+                AX.setPosition(rect.origin, of: target.window)
+                EngineDiagnostics.log("apply: ok, app kept size (\(Int(actual.width))×\(Int(actual.height))), origin repaired")
+            } else {
+                EngineDiagnostics.log("apply: SUSPICIOUS read-back (\(Int(actual.width))×\(Int(actual.height)) vs requested \(Int(rect.width))×\(Int(rect.height)))")
+            }
         } else {
             EngineDiagnostics.log("apply: ok")
         }
