@@ -67,6 +67,7 @@ final class AppEnvironment {
             if let mode = result.preferences.padVisibilityMode { prefs.padVisibilityMode = mode }
             if let titles = result.preferences.showPadTitles { prefs.showPadTitles = titles }
             if let enabled = result.preferences.enabled { prefs.enabled = enabled }
+            if let grouping = result.preferences.groupPads { prefs.groupPads = grouping }
             prefs.lastWTImportHash = result.sourceHash
             persistLayouts()
             return true

@@ -25,6 +25,10 @@ final class DragSessionController: @unchecked Sendable {
         var hoveredLayoutID: UUID?
         var padsVisible = false
         var cancelled = false
+        /// holdOptionToShow only: users release ⌥ a beat before the mouse.
+        /// Remember the hover through that gap so the drop still lands.
+        var graceHoverID: UUID?
+        var graceUntil: TimeInterval = 0
 
         init(target: TargetWindow, stripScreenID: CGDirectDisplayID) {
             self.target = target
@@ -158,12 +162,20 @@ final class DragSessionController: @unchecked Sendable {
             // pin overlay state.
             overlayHideAll()
             defer { emitEvent(.dragEnded) }
-            guard !session.cancelled, session.padsVisible,
-                  let layoutID = session.hoveredLayoutID else { return }
+            // Live hover wins; a ⌥-release within the grace window still counts.
+            let graceActive = ProcessInfo.processInfo.systemUptime < session.graceUntil
+            let effectiveHover = session.hoveredLayoutID
+                ?? (graceActive ? session.graceHoverID : nil)
+            EngineDiagnostics.log("drop: padsVisible=\(session.padsVisible) hovered=\(session.hoveredLayoutID?.uuidString.prefix(8) ?? "nil") grace=\(graceActive ? session.graceHoverID?.uuidString.prefix(8) ?? "nil" : "expired") cancelled=\(session.cancelled)")
+            guard !session.cancelled, let layoutID = effectiveHover else { return }
             let config = shared.configuration.withLock { $0 }
             let screens = shared.screens.withLock { $0 }
             guard let layout = config.layouts.first(where: { $0.id == layoutID }),
-                  let screen = screens.screen(withID: session.stripScreenID) else { return }
+                  let screen = screens.screen(withID: session.stripScreenID) else {
+                EngineDiagnostics.log("drop: layout or screen lookup FAILED")
+                return
+            }
+            EngineDiagnostics.log("drop: applying '\(layout.name)' on screen=\(screen.displayID)")
             applyLayout(layout, session.target, screen)
         case .identifying:
             bumpGeneration() // drop the in-flight resolver result
@@ -208,6 +220,8 @@ final class DragSessionController: @unchecked Sendable {
         }
         if newHover != session.hoveredLayoutID {
             session.hoveredLayoutID = newHover
+            if newHover != nil { session.graceHoverID = nil }
+            EngineDiagnostics.log("hover: \(newHover?.uuidString.prefix(8) ?? "nil") cursor=(\(Int(cursor.x)),\(Int(cursor.y))) snapToken=\(snapshot?.token ?? 0) stripToken=\(stripToken)")
             overlaySetHover(newHover)
         }
     }
@@ -223,9 +237,19 @@ final class DragSessionController: @unchecked Sendable {
         guard shouldShow != session.padsVisible else { return }
         session.padsVisible = shouldShow
         if shouldShow {
+            session.graceHoverID = nil
             stripToken &+= 1
+            EngineDiagnostics.log("pads: show screen=\(session.stripScreenID) token=\(stripToken)")
             overlayShow(session.stripScreenID, stripToken)
         } else {
+            // In holdOptionToShow, hiding means "⌥ released" — likely the
+            // start of a simultaneous release, not a cancel. Keep the hover
+            // alive briefly. In optionHides, pressing ⌥ IS the cancel gesture.
+            if mode == .holdOptionToShow, let hovered = session.hoveredLayoutID {
+                session.graceHoverID = hovered
+                session.graceUntil = ProcessInfo.processInfo.systemUptime + 0.4
+            }
+            EngineDiagnostics.log("pads: hide mode=\(mode.rawValue) grace=\(session.graceHoverID?.uuidString.prefix(8) ?? "nil")")
             session.hoveredLayoutID = nil
             overlayHideAll()
         }

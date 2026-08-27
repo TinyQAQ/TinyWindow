@@ -52,10 +52,13 @@ func runWindowTidyImporterChecks() {
             fail("Mail Size missing or not fixed")
         }
 
-        // Global preferences map onto TinyWindow settings.
-        expect(result.preferences.padVisibilityMode == .holdOptionToShow, "OptionButton 1 → optionHold")
+        // Global preferences map onto TinyWindow settings. OptionButton=1 means
+        // "⌥ temporarily hides the pads" (verified against the real app —
+        // pads always appear on a plain drag).
+        expect(result.preferences.padVisibilityMode == .optionHides, "OptionButton 1 → optionHides")
         expect(result.preferences.showPadTitles == true, "ShowTitles mapped")
         expect(result.preferences.enabled == true, "Enabled mapped")
+        expect(result.preferences.groupPads == true, "AutoGroupLayouts mapped")
 
         // All imported layouts carry the wtImport origin.
         expect(result.layouts.allSatisfy { $0.origin == .wtImport }, "origin == wtImport")

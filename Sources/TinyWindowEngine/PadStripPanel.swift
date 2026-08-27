@@ -1,7 +1,7 @@
 import AppKit
 import TinyWindowCore
 
-/// One screen's pad strip: a borderless, non-activating panel that never
+/// One screen's pad overlay: a borderless, non-activating panel that never
 /// receives mouse events (the drag belongs to the other app — hover is
 /// hit-tested from tap coordinates by the engine).
 @MainActor
@@ -31,32 +31,13 @@ final class PadStripPanel {
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
         panel.isMovable = false
-
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.cornerRadius = 16
-        container.layer?.masksToBounds = true
-
-        let effect = NSVisualEffectView()
-        effect.material = .hudWindow
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.autoresizingMask = [.width, .height]
-        container.addSubview(effect)
-
-        stripView.autoresizingMask = [.width, .height]
-        container.addSubview(stripView)
-
-        panel.contentView = container
+        panel.contentView = stripView
     }
 
-    func present(geometry: PadStripGeometry, layouts: [Layout], showTitles: Bool) {
+    func present(geometry: PadStripGeometry) {
         fadeGeneration += 1
-        panel.setFrame(geometry.stripFrameC, display: false)
-        if let content = panel.contentView {
-            for subview in content.subviews { subview.frame = content.bounds }
-        }
-        stripView.update(layouts: layouts, geometry: geometry, showTitles: showTitles)
+        panel.setFrame(geometry.panelFrameC, display: false)
+        stripView.update(geometry: geometry)
         if !panel.isVisible { panel.alphaValue = 0 }
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
@@ -90,7 +71,7 @@ final class PadStripPanel {
     /// Builds the layer tree and font caches so the first real drag has no hitch.
     func prewarm() {
         panel.alphaValue = 0
-        panel.setFrame(CGRect(x: 0, y: 0, width: 120, height: 90), display: true)
+        panel.setFrame(CGRect(x: 0, y: 0, width: 200, height: 140), display: true)
         panel.orderFrontRegardless()
         panel.orderOut(nil)
     }
@@ -101,69 +82,88 @@ final class PadStripPanel {
     }
 }
 
-/// Hand-drawn pad strip (deliberately not SwiftUI: instant first frame, and
-/// hover repaints are a plain needsDisplay flip).
+/// Hand-drawn Window Tidy-style pads: translucent mini screens with grid
+/// lines, each covered region filled; the hovered region lights up.
 final class PadStripView: NSView {
     override var isFlipped: Bool { true }
 
-    private var layouts: [Layout] = []
-    private var cells: [CGRect] = []
+    private var pads: [PadRender] = []
     private var titleHeight: CGFloat = 0
-    private var showTitles = false
 
     var hoveredLayoutID: UUID? {
         didSet { if hoveredLayoutID != oldValue { needsDisplay = true } }
     }
 
-    func update(layouts: [Layout], geometry: PadStripGeometry, showTitles: Bool) {
-        self.layouts = layouts
-        self.cells = geometry.padCellsTopLocal
-        self.titleHeight = geometry.titleHeight
-        self.showTitles = showTitles
-        self.hoveredLayoutID = nil
+    func update(geometry: PadStripGeometry) {
+        pads = geometry.pads
+        titleHeight = geometry.titleHeight
+        hoveredLayoutID = nil
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let accent = NSColor.controlAccentColor
 
-        for (index, layout) in layouts.enumerated() where index < cells.count {
-            let cell = cells[index]
-            let hovered = layout.id == hoveredLayoutID
+        for pad in pads {
+            let padHovered = pad.regions.contains { $0.layoutID == hoveredLayoutID }
 
-            let cellPath = NSBezierPath(roundedRect: cell, xRadius: 10, yRadius: 10)
-            (hovered ? accent.withAlphaComponent(0.30) : NSColor.white.withAlphaComponent(0.08)).setFill()
-            cellPath.fill()
-            if hovered {
-                accent.setStroke()
-                cellPath.lineWidth = 2
-                cellPath.stroke()
+            // Mini screen body.
+            let body = NSBezierPath(roundedRect: pad.frameLocal, xRadius: 8, yRadius: 8)
+            NSColor(calibratedRed: 0.09, green: 0.13, blue: 0.20, alpha: padHovered ? 0.78 : 0.62).setFill()
+            body.fill()
+            NSColor.white.withAlphaComponent(padHovered ? 0.65 : 0.38).setStroke()
+            body.lineWidth = padHovered ? 2 : 1.2
+            body.stroke()
+
+            // Grid lines.
+            let inner = pad.frameLocal.insetBy(dx: 1.5, dy: 1.5)
+            if let columns = pad.gridColumns, let rows = pad.gridRows,
+               columns > 1 || rows > 1 {
+                let gridPath = NSBezierPath()
+                gridPath.lineWidth = 0.5
+                for i in 1..<max(1, columns) {
+                    let x = inner.minX + GridMath.boundary(i, count: columns, length: inner.width)
+                    gridPath.move(to: CGPoint(x: x, y: inner.minY))
+                    gridPath.line(to: CGPoint(x: x, y: inner.maxY))
+                }
+                for i in 1..<max(1, rows) {
+                    let y = inner.minY + GridMath.boundary(i, count: rows, length: inner.height)
+                    gridPath.move(to: CGPoint(x: inner.minX, y: y))
+                    gridPath.line(to: CGPoint(x: inner.maxX, y: y))
+                }
+                NSColor.white.withAlphaComponent(0.14).setStroke()
+                gridPath.stroke()
             }
 
-            let glyphArea = CGRect(x: cell.minX, y: cell.minY,
-                                   width: cell.width, height: cell.height - titleHeight)
-                .insetBy(dx: 8, dy: 7)
-            let style = GlyphStyle(
-                screenFill: NSColor.white.withAlphaComponent(0.12).cgColor,
-                screenStroke: NSColor.white.withAlphaComponent(0.35).cgColor,
-                regionFill: accent.withAlphaComponent(hovered ? 1.0 : 0.85).cgColor,
-                regionStroke: accent.cgColor,
-                cornerRadius: 3)
-            GlyphRenderer.draw(layout, in: ctx, rect: glyphArea, style: style)
+            // Regions.
+            for region in pad.regions {
+                let hovered = region.layoutID == hoveredLayoutID
+                let path = NSBezierPath(roundedRect: region.rectLocal.insetBy(dx: 1, dy: 1),
+                                        xRadius: 4, yRadius: 4)
+                accent.withAlphaComponent(hovered ? 0.92 : 0.42).setFill()
+                path.fill()
+                accent.withAlphaComponent(hovered ? 1.0 : 0.8).setStroke()
+                path.lineWidth = hovered ? 2 : 1
+                path.stroke()
+            }
 
-            if showTitles, titleHeight > 0 {
+            // Label: the hovered layout's name wins over the group label.
+            if titleHeight > 0 {
+                let hoveredName = pad.regions.first { $0.layoutID == hoveredLayoutID }?.name
+                let text = hoveredName ?? pad.label
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.alignment = .center
                 paragraph.lineBreakMode = .byTruncatingTail
                 let attributes: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.systemFont(ofSize: 9, weight: .medium),
-                    .foregroundColor: NSColor.white.withAlphaComponent(hovered ? 1.0 : 0.75),
+                    .font: NSFont.systemFont(ofSize: 12, weight: padHovered ? .semibold : .medium),
+                    .foregroundColor: NSColor.white.withAlphaComponent(padHovered ? 1.0 : 0.82),
                     .paragraphStyle: paragraph,
                 ]
-                let titleRect = CGRect(x: cell.minX + 2, y: cell.maxY - titleHeight - 1,
-                                       width: cell.width - 4, height: titleHeight)
-                (layout.name as NSString).draw(in: titleRect, withAttributes: attributes)
+                let titleRect = CGRect(x: pad.frameLocal.minX - 30,
+                                       y: pad.frameLocal.maxY + 3,
+                                       width: pad.frameLocal.width + 60,
+                                       height: titleHeight - 3)
+                (text as NSString).draw(in: titleRect, withAttributes: attributes)
             }
         }
     }

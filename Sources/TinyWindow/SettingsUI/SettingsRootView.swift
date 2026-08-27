@@ -42,6 +42,7 @@ struct GeneralTab: View {
                     Text("屏幕右侧").tag(PadEdge.right)
                 }
                 Toggle("显示布局名称", isOn: model.showPadTitles)
+                Toggle("自动分组（同网格且不重叠的布局合并为一个 pad）", isOn: model.groupPads)
                 HStack {
                     Text("触发拖动距离")
                     Slider(value: model.minimumDragDistance, in: 4...30, step: 1)

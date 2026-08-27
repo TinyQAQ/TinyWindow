@@ -49,12 +49,14 @@ public struct WTLegacyDocument: Decodable, Sendable {
     public var enabled: Bool?
     public var optionButton: Int?
     public var showTitles: Bool?
+    public var autoGroupLayouts: Bool?
     public var layouts: [Entry]
 
     enum CodingKeys: String, CodingKey {
         case enabled = "Enabled"
         case optionButton = "OptionButton"
         case showTitles = "ShowTitles"
+        case autoGroupLayouts = "AutoGroupLayouts"
         case layouts = "Layouts"
     }
 }

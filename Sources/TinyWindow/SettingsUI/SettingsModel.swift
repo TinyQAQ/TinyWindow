@@ -48,6 +48,7 @@ final class SettingsModel: ObservableObject {
     var padVisibilityMode: Binding<PadVisibilityMode> { prefBinding(\.padVisibilityMode) }
     var padEdge: Binding<PadEdge> { prefBinding(\.padEdge) }
     var showPadTitles: Binding<Bool> { prefBinding(\.showPadTitles) }
+    var groupPads: Binding<Bool> { prefBinding(\.groupPads) }
     var minimumDragDistance: Binding<Double> { prefBinding(\.minimumDragDistance) }
     var blacklist: Binding<[String]> { prefBinding(\.blacklistBundleIDs) }
 

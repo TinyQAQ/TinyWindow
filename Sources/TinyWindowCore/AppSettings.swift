@@ -25,6 +25,8 @@ public struct AppSettings: Equatable, Sendable {
     public var padVisibilityMode: PadVisibilityMode
     public var padEdge: PadEdge
     public var showPadTitles: Bool
+    /// Merge same-grid, non-overlapping layouts into one pad (WT AutoGroupLayouts).
+    public var groupPads: Bool
     /// Points the cursor must travel from mouse-down before drag
     /// identification starts (avoids flicker on sloppy clicks).
     public var minimumDragDistance: Double
@@ -34,12 +36,14 @@ public struct AppSettings: Equatable, Sendable {
                 padVisibilityMode: PadVisibilityMode = .always,
                 padEdge: PadEdge = .bottom,
                 showPadTitles: Bool = true,
+                groupPads: Bool = true,
                 minimumDragDistance: Double = 8,
                 blacklistBundleIDs: [String] = []) {
         self.enabled = enabled
         self.padVisibilityMode = padVisibilityMode
         self.padEdge = padEdge
         self.showPadTitles = showPadTitles
+        self.groupPads = groupPads
         self.minimumDragDistance = minimumDragDistance
         self.blacklistBundleIDs = blacklistBundleIDs
     }

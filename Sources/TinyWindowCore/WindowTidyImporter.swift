@@ -13,6 +13,7 @@ public struct WTImportedPreferences: Equatable, Sendable {
     public var enabled: Bool?
     public var padVisibilityMode: PadVisibilityMode?
     public var showPadTitles: Bool?
+    public var groupPads: Bool?
 }
 
 public struct WTImportResult: Sendable {
@@ -62,16 +63,20 @@ public enum WindowTidyImporter {
             }
         }
 
+        // OptionButton semantics verified against the real app: pads appear on
+        // a plain drag; the Option key temporarily HIDES them (1). It is never
+        // a hold-to-show gate.
         let preferences = WTImportedPreferences(
             enabled: document.enabled,
             padVisibilityMode: document.optionButton.flatMap { button in
                 switch button {
                 case 0: .always
-                case 1: .holdOptionToShow
+                case 1: .optionHides
                 default: nil
                 }
             },
-            showPadTitles: document.showTitles)
+            showPadTitles: document.showTitles,
+            groupPads: document.autoGroupLayouts)
 
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         return WTImportResult(layouts: layouts, preferences: preferences,

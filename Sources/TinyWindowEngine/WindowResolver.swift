@@ -39,9 +39,14 @@ final class WindowResolver: @unchecked Sendable {
         // point, front-to-back, no IPC into any app, immune to hung apps.
         guard let list = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
-        else { return deliver(gen, .rejected) }
+        else {
+            EngineDiagnostics.log("resolve: rejected (window list unavailable)")
+            return deliver(gen, .rejected)
+        }
 
         var hitPID: pid_t?
+        var windowID: CGWindowID = 0
+        var startBounds: QRect?
         for entry in list {
             if let alpha = entry[kCGWindowAlpha as String] as? Double, alpha <= 0.01 { continue }
             guard let boundsDict = entry[kCGWindowBounds as String] as? NSDictionary,
@@ -54,89 +59,120 @@ final class WindowResolver: @unchecked Sendable {
                 return deliver(gen, .rejected)
             }
             hitPID = pid_t(ownerPID)
+            windowID = CGWindowID((entry[kCGWindowNumber as String] as? Int) ?? 0)
+            startBounds = QRect(rawQuartz: bounds)
             break
         }
-        guard let hitPID, hitPID != ownPID else { return deliver(gen, .rejected) }
+        guard let hitPID, hitPID != ownPID, let startBounds, windowID != 0 else {
+            EngineDiagnostics.log("resolve: rejected (no normal window under downPoint / own window)")
+            return deliver(gen, .rejected)
+        }
 
         let bundleID = bundleID(for: hitPID)
         let blacklist = shared.configuration.withLock { $0.settings.blacklistBundleIDs }
-        if let bundleID, blacklist.contains(bundleID) { return deliver(gen, .rejected) }
+        if let bundleID, blacklist.contains(bundleID) {
+            EngineDiagnostics.log("resolve: rejected (blacklisted \(bundleID))")
+            return deliver(gen, .rejected)
+        }
 
         // STEP 2 — one AX hit-test at the ORIGINAL down point (the live cursor
-        // may already be over a different window for text/file drags).
+        // may already be over a different window for text/file drags). The AX
+        // window is kept for the eventual frame WRITE only; the follow check
+        // below tracks WindowServer bounds instead, because some apps
+        // (Electron) freeze their AX-reported position during a native drag.
         guard fresh(gen) else { return }
         guard let element = AX.element(at: down),
-              let window = AX.window(containing: element),
-              let p0 = AX.position(of: window),
-              let s0 = AX.size(of: window)
+              let window = AX.window(containing: element)
         else { return deliver(gen, .rejected) }
 
         let target = TargetWindow(
             window: window,
             pid: AX.pid(of: window) ?? hitPID,
             bundleID: bundleID,
-            initialFrame: QRect(x: p0.x, y: p0.y, width: s0.width, height: s0.height))
+            initialFrame: startBounds)
         let m0 = shared.cursor.withLock { $0 }
 
-        scheduleSample(gen: gen, target: target, p0: p0, s0: s0, m0: m0,
-                       lastSampleCursor: m0, samplesTaken: 0)
+        scheduleSample(gen: gen, target: target, windowID: windowID, b0: startBounds,
+                       m0: m0, lastSampleCursor: m0, samplesTaken: 0)
     }
 
-    // MARK: - Follow check
+    /// Live window bounds straight from the WindowServer — ground truth during
+    /// server-side drags, no app IPC, immune to laggy AX implementations.
+    private func serverBounds(_ windowID: CGWindowID) -> QRect? {
+        guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID)
+                as? [[String: Any]],
+              let dict = list.first?[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: dict)
+        else { return nil }
+        return QRect(rawQuartz: bounds)
+    }
+
+    // MARK: - Follow check (WindowServer bounds, not AX)
     //
     //   size changed (±2 pt)                     → it's a RESIZE     → rejected
-    //   |Δwindow − Δmouse| ≤ max(8, 0.35·|Δm|)   → window follows    → confirmed
+    //   |Δwindow − Δmouse| ≤ max(6, 0.3·|Δm|)    → window follows    → confirmed
     //   ≥2 samples and window hasn't moved half  → text/file drag    → rejected
-    //   ≥6 samples                               → hard cap on AX spend
+    //   ≥8 samples                               → cap
     //
-    // The proportional tolerance absorbs the frame-or-two of lag apps report
-    // during server-side drags; sampling re-arms on ≥12 pt of fresh cursor
-    // travel, never on a wall clock (a user pausing mid-drag stays pending).
+    // Server bounds are exact during system drags (no app IPC, no Electron AX
+    // freeze), so sampling is cheap and fast. Sampling re-arms on ≥10 pt of
+    // fresh cursor travel, never on a wall clock (a user pausing mid-drag
+    // stays pending).
 
-    private func scheduleSample(gen: UInt64, target: TargetWindow, p0: QPoint, s0: CGSize,
-                                m0: QPoint, lastSampleCursor: QPoint, samplesTaken: Int) {
-        queue.asyncAfter(deadline: .now() + .milliseconds(70)) { [self] in
-            sampleNow(gen: gen, target: target, p0: p0, s0: s0, m0: m0,
+    private func scheduleSample(gen: UInt64, target: TargetWindow, windowID: CGWindowID,
+                                b0: QRect, m0: QPoint, lastSampleCursor: QPoint,
+                                samplesTaken: Int) {
+        queue.asyncAfter(deadline: .now() + .milliseconds(45)) { [self] in
+            sampleNow(gen: gen, target: target, windowID: windowID, b0: b0, m0: m0,
                       lastSampleCursor: lastSampleCursor, samplesTaken: samplesTaken)
         }
     }
 
-    private func sampleNow(gen: UInt64, target: TargetWindow, p0: QPoint, s0: CGSize,
-                           m0: QPoint, lastSampleCursor: QPoint, samplesTaken: Int) {
+    private func sampleNow(gen: UInt64, target: TargetWindow, windowID: CGWindowID,
+                           b0: QRect, m0: QPoint, lastSampleCursor: QPoint,
+                           samplesTaken: Int) {
         guard fresh(gen) else { return }
         let m = shared.cursor.withLock { $0 }
 
-        // No fresh travel since the last AX sample → cheap reschedule, no IPC.
-        if samplesTaken > 0, m.distance(to: lastSampleCursor) < 12 {
-            return scheduleSample(gen: gen, target: target, p0: p0, s0: s0, m0: m0,
-                                  lastSampleCursor: lastSampleCursor, samplesTaken: samplesTaken)
+        // No fresh travel since the last sample → cheap reschedule.
+        if samplesTaken > 0, m.distance(to: lastSampleCursor) < 10 {
+            return scheduleSample(gen: gen, target: target, windowID: windowID, b0: b0,
+                                  m0: m0, lastSampleCursor: lastSampleCursor,
+                                  samplesTaken: samplesTaken)
         }
 
-        guard let p = AX.position(of: target.window),
-              let s = AX.size(of: target.window)
-        else { return deliver(gen, .rejected) }
+        guard let bounds = serverBounds(windowID) else {
+            EngineDiagnostics.log("resolve: rejected (window gone)")
+            return deliver(gen, .rejected)
+        }
 
-        if abs(s.width - s0.width) > 2 || abs(s.height - s0.height) > 2 {
+        if abs(bounds.width - b0.width) > 2 || abs(bounds.height - b0.height) > 2 {
+            EngineDiagnostics.log("resolve: rejected (resize)")
             return deliver(gen, .rejected)
         }
 
         let dM = CGVector(dx: m.x - m0.x, dy: m.y - m0.y)
-        let dW = CGVector(dx: p.x - p0.x, dy: p.y - p0.y)
+        let dW = CGVector(dx: bounds.x - b0.x, dy: bounds.y - b0.y)
         let travel = hypot(dM.dx, dM.dy)
         let taken = samplesTaken + 1
 
-        if travel >= 12 {
+        if travel >= 10 {
             let mismatch = hypot(dW.dx - dM.dx, dW.dy - dM.dy)
-            if mismatch <= max(8, 0.35 * travel) {
+            if mismatch <= max(6, 0.3 * travel) {
+                EngineDiagnostics.log("resolve: CONFIRMED pid=\(target.pid) \(target.bundleID ?? "?") after \(taken) sample(s)")
                 return deliver(gen, .confirmed(target))
             }
             let movedAlongMouse = (dW.dx * dM.dx + dW.dy * dM.dy) / travel
             if taken >= 2, movedAlongMouse < 0.5 * travel {
+                EngineDiagnostics.log("resolve: rejected (window not following: dW=(\(Int(dW.dx)),\(Int(dW.dy))) dM=(\(Int(dM.dx)),\(Int(dM.dy))))")
                 return deliver(gen, .rejected)
             }
         }
-        if taken >= 6 { return deliver(gen, .rejected) }
-        scheduleSample(gen: gen, target: target, p0: p0, s0: s0, m0: m0,
+        if taken >= 8 {
+            EngineDiagnostics.log("resolve: rejected (sample cap)")
+            return deliver(gen, .rejected)
+        }
+        scheduleSample(gen: gen, target: target, windowID: windowID, b0: b0, m0: m0,
                        lastSampleCursor: m, samplesTaken: taken)
     }
 

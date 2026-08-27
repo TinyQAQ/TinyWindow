@@ -19,6 +19,7 @@ public final class TidyEngine {
     private let screenTracker: ScreenTracker
     private var watchdog: Timer?
     private var watchdogTicks = 0
+    private var tapDisabledStreak = 0
     private var started = false
 
     public init() {
@@ -83,11 +84,15 @@ public final class TidyEngine {
 
     public func start() throws {
         guard !started else { return }
+        EngineDiagnostics.enabled = UserDefaults.standard.bool(forKey: "debugLogging")
+        EngineDiagnostics.rotateIfNeeded()
+        EngineDiagnostics.log("engine: start requested, trusted=\(AX.isTrusted())")
         guard AX.isTrusted() else {
             setHealth(.paused(.accessibilityRevoked))
             throw EngineError.accessibilityNotGranted
         }
         AX.configureGlobalTimeout(seconds: 0.25)
+        EngineDiagnostics.log("engine: start (screens will follow)")
         screenTracker.start()
         overlay.updateScreens(screenTracker.snapshots)
         started = true
@@ -178,8 +183,10 @@ public final class TidyEngine {
             return
         }
         if AX.isTrusted(), eventTap.start(controller: controller) {
+            EngineDiagnostics.log("engine: event tap RUNNING")
             setHealth(.running)
         } else {
+            EngineDiagnostics.log("engine: event tap FAILED (trusted=\(AX.isTrusted()))")
             setHealth(.paused(.accessibilityRevoked))
         }
     }
@@ -202,11 +209,28 @@ public final class TidyEngine {
     private func tick() {
         watchdogTicks += 1
         if eventTap.isRunning {
-            if !eventTap.tapEnabled { eventTap.reenable() }
+            if !eventTap.tapEnabled {
+                tapDisabledStreak += 1
+                EngineDiagnostics.log("watchdog: tap disabled (streak \(tapDisabledStreak)) → re-enable")
+                eventTap.reenable()
+                if tapDisabledStreak >= 2 {
+                    // Re-enable didn't stick — the tap is beyond revival.
+                    // Tear it down and create a fresh one.
+                    EngineDiagnostics.log("watchdog: re-enable ineffective → recreating tap")
+                    eventTap.stop()
+                    tapDisabledStreak = 0
+                    startTapIfNeeded()
+                }
+            } else {
+                tapDisabledStreak = 0
+            }
             let buttonUp = !CGEventSource.buttonState(.combinedSessionState, button: .left)
             eventTap.perform { [controller] in
                 controller.watchdogCheck(buttonUp: buttonUp)
             }
+        }
+        if watchdogTicks % 30 == 0 {
+            EngineDiagnostics.log("watchdog: heartbeat ticks=\(watchdogTicks) tapRunning=\(eventTap.isRunning) tapEnabled=\(eventTap.tapEnabled)")
         }
         guard watchdogTicks % 5 == 0 else { return }
         let trusted = AX.isTrusted()

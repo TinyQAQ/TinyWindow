@@ -96,6 +96,7 @@ private func tinyWindowTapCallback(
     let controller = Unmanaged<DragSessionController>.fromOpaque(refcon).takeUnretainedValue()
     switch type {
     case .tapDisabledByTimeout, .tapDisabledByUserInput:
+        EngineDiagnostics.log("tap: DISABLED by \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
         controller.tapWasDisabled()
     case .flagsChanged:
         controller.optionChanged(event.flags.contains(.maskAlternate))

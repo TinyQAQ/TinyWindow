@@ -49,27 +49,37 @@ final class LayoutApplier: @unchecked Sendable {
 
         func dance() -> AXError {
             var error = AX.setPosition(rect.origin, of: target.window)
+            if error != .success { EngineDiagnostics.log("apply: setPosition#1 AXError=\(error.rawValue)") }
             if error == .success {
                 error = AX.setSize(CGSize(width: rect.width, height: rect.height), of: target.window)
+                if error != .success { EngineDiagnostics.log("apply: setSize AXError=\(error.rawValue)") }
             }
             if error == .success {
                 error = AX.setPosition(rect.origin, of: target.window)
+                if error != .success { EngineDiagnostics.log("apply: setPosition#2 AXError=\(error.rawValue)") }
             }
             return error
         }
 
+        EngineDiagnostics.log("apply: pid=\(target.pid) rect=(\(Int(rect.x)),\(Int(rect.y)),\(Int(rect.width)),\(Int(rect.height))) enhancedUI=\(enhanced)")
         var error = dance()
         if error == .cannotComplete {
             usleep(100_000) // one retry for momentarily busy apps
             error = dance()
         }
-        guard error == .success else { return false }
+        guard error == .success else {
+            EngineDiagnostics.log("apply: FAILED AXError=\(error.rawValue)")
+            return false
+        }
 
         // Tolerate app-imposed geometry (Terminal cell rounding, min/max sizes)
         // but keep the top-left corner honest.
         if let actual = AX.frame(of: target.window),
            abs(actual.width - rect.width) > 2 || abs(actual.height - rect.height) > 2 {
             AX.setPosition(rect.origin, of: target.window)
+            EngineDiagnostics.log("apply: ok, app kept size (\(Int(actual.width))×\(Int(actual.height))), origin repaired")
+        } else {
+            EngineDiagnostics.log("apply: ok")
         }
         return true
     }

@@ -18,6 +18,7 @@ final class PreferencesStore {
         case padVisibilityMode
         case padEdge
         case showPadTitles
+        case groupPads
         case minimumDragDistance
         case blacklistBundleIDs
         case wtImportPromptShown
@@ -32,6 +33,7 @@ final class PreferencesStore {
                     padVisibilityMode: padVisibilityMode,
                     padEdge: padEdge,
                     showPadTitles: showPadTitles,
+                    groupPads: groupPads,
                     minimumDragDistance: minimumDragDistance,
                     blacklistBundleIDs: blacklistBundleIDs)
     }
@@ -60,6 +62,11 @@ final class PreferencesStore {
     var showPadTitles: Bool {
         get { defaults.object(forKey: Key.showPadTitles.rawValue) as? Bool ?? true }
         set { set(newValue, .showPadTitles) }
+    }
+
+    var groupPads: Bool {
+        get { defaults.object(forKey: Key.groupPads.rawValue) as? Bool ?? true }
+        set { set(newValue, .groupPads) }
     }
 
     var minimumDragDistance: Double {
