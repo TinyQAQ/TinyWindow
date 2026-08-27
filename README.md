@@ -44,7 +44,7 @@ make run     # swift build + assemble dist/TinyWindow.app + launch
 make test    # run the check suite
 ```
 
-**Stable dev signing (do this once):** ad-hoc signatures change every build, which silently kills the Accessibility grant on each rebuild. Create a self-signed code-signing certificate named `TinyWindow Dev` — either run `scripts/dev-cert.sh`, or in Keychain Access: Certificate Assistant → Create a Certificate… → name `TinyWindow Dev`, Self-Signed Root, **Code Signing**. `make app` picks it up automatically and the grant then survives rebuilds.
+**Stable dev signing (do this once):** ad-hoc signatures change every build, which silently kills the Accessibility grant on each rebuild. Run `scripts/dev-cert.sh` — it creates a self-signed code-signing certificate named `TinyWindow Dev`, imports it, and verifies with a real signing test (it prints exact manual-trust steps if macOS refuses scripted trust). GUI alternative: Keychain Access (hidden on macOS 26 — it lives at `/System/Library/CoreServices/Applications/Keychain Access.app`, not the new Passwords app) → **menu bar** → Certificate Assistant → Create a Certificate… → name `TinyWindow Dev`, Self-Signed Root, **Code Signing**. `make app` picks the identity up automatically and the grant then survives rebuilds.
 
 ### Uninstall
 
@@ -94,7 +94,7 @@ make run     # 构建 + 打包 dist/TinyWindow.app + 启动
 make test    # 跑检查套件
 ```
 
-**稳定开发签名（一次性）**：ad-hoc 签名每次构建都变，辅助功能授权会随之失效。创建一个名为 `TinyWindow Dev` 的自签代码签名证书即可——运行 `scripts/dev-cert.sh`，或在「钥匙串访问」→ 证书助理 → 创建证书…（名称 `TinyWindow Dev`、自签名根证书、**代码签名**）。之后 `make app` 自动使用它，授权在重编译后保持有效。
+**稳定开发签名（一次性）**：ad-hoc 签名每次构建都变，辅助功能授权会随之失效。运行 `scripts/dev-cert.sh` 即可——它会创建名为 `TinyWindow Dev` 的自签代码签名证书、导入钥匙串并实际验签（若系统拒绝脚本设置信任，会打印精确的手动步骤）。图形界面备选：钥匙串访问在 macOS 26 里被隐藏（位于 `/System/Library/CoreServices/Applications/Keychain Access.app`，不是新的「密码」App）→ 打开后在**顶部菜单栏** → 证书助理 → 创建证书…（名称 `TinyWindow Dev`、自签名根证书、**代码签名**）。之后 `make app` 自动使用该证书，授权在重编译后保持有效。
 
 ### 卸载
 
